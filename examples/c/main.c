@@ -1,4 +1,4 @@
-#include <swiftly/sw_extension.h>
+#include <swiftlys2/sw_extension.h>
 
 struct extension_state {
     const sw_memory* memory;
@@ -25,9 +25,6 @@ SW_API sw_status sw_extension_init(const sw_init_context* ctx)
     status = ctx->core(ctx, SW_IFACE_CORE, &core);
     if (status != SW_OK)
         return status;
-    if (!core || !core->init || !core->memory || !core->init->set_unload_callback ||
-        !core->init->set_info || !core->memory->alloc || !core->memory->free)
-        return SW_E_INVALID_ARG;
     state.memory = core->memory;
     status = core->init->set_unload_callback(core->init, on_unload, &state);
     if (status != SW_OK)
@@ -35,5 +32,5 @@ SW_API sw_status sw_extension_init(const sw_init_context* ctx)
     status = core->init->set_info(core->init, "C example", "1.0.0", 0, 0);
     if (status != SW_OK)
         return status;
-    return core->memory->alloc(core->memory, 1024, &state.allocation);
+    return 0;
 }

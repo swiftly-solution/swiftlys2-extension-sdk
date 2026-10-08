@@ -1,4 +1,6 @@
 .xmake/
+.vscode/
 build/
+compile_commands.json
 *.user
 .DS_Store
