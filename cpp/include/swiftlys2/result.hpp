@@ -20,7 +20,7 @@ namespace sw {
  * underlying C API still returns sw_status. Formatting errors may allocate.
  */
 template<class T>
-using result = std::expected<T, std::string>;
+using Result = std::expected<T, std::string>;
 
 namespace detail {
 
@@ -64,7 +64,7 @@ inline std::unexpected<std::string> fail(
 }
 
 /** @brief Convert a host status into success or an operation-specific string error. */
-inline result<void> check(
+inline Result<void> check(
     sw_status code, std::string_view operation, std::string_view invalid_arg,
     std::string_view failed = "operation failed")
 {
@@ -79,7 +79,7 @@ inline result<void> check(
  * @param parameter Operation and parameter name used in invalid-input errors.
  * @return An owned terminated string, or a descriptive error for invalid input.
  */
-inline result<std::string> c_string(std::string_view value, std::string_view parameter)
+inline Result<std::string> c_string(std::string_view value, std::string_view parameter)
 {
     if (value.find('\0') != std::string_view::npos)
         return fail(std::string(parameter) + ": embedded NUL is not allowed");

@@ -12,10 +12,10 @@ namespace sw {
  * Use the class that declares inherited fields.
  * @see sw_schema
  */
-class schema {
+class Schema {
 public:
     /** @param api Borrowed host schema interface, valid until extension unload. */
-    explicit schema(const sw_schema* api) noexcept : api_(api) {}
+    explicit Schema(const sw_schema* api) noexcept : api_(api) {}
 
     /**
      * @brief Look up a schema field's byte offset within its declaring class.
@@ -26,7 +26,7 @@ public:
      * @note For inherited fields, use the class that declares the field.
      * @see sw_schema::get_offset
      */
-    [[nodiscard]] result<std::uint32_t> get_offset(
+    [[nodiscard]] Result<std::uint32_t> GetOffset(
         std::string_view class_name, std::string_view field_name) const
     {
         if (!api_ || !api_->get_offset)
@@ -54,7 +54,7 @@ public:
      * fields, use the class that declares the field.
      * @see sw_schema::set_state_changed
      */
-    [[nodiscard]] result<void> set_state_changed(
+    [[nodiscard]] Result<void> SetStateChanged(
         void* object, std::string_view class_name, std::string_view field_name) const
     {
         if (!api_ || !api_->set_state_changed)

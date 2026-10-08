@@ -5,6 +5,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -326,89 +327,98 @@ void reset_counts(behavior value = behavior::success)
 }
 
 struct core_probe {
-    const sw::core& api;
+    sw::Core api;
+
+    explicit core_probe(sw::Core core) noexcept : api(core) {}
 
     ~core_probe()
     {
-        // A derived member can still use the base's APIs during destruction.
-        if (api.schema.get_offset("CBaseEntity", "m_iHealth")) {
-            CHECK(api.misc.is_hotreloaded() == active->hot_reloaded);
+        // An independently saved copy remains valid during member destruction.
+        if (api.Schema().GetOffset("CBaseEntity", "m_iHealth")) {
+            CHECK(api.Misc().IsHotReloaded() == active->hot_reloaded);
             ++member_bound_destructions;
         }
     }
 };
 
-class test_extension : public sw::extension {
+class test_extension : public sw::Extension {
 public:
     test_extension()
     {
-        static_assert(std::is_same_v<decltype(core_), const sw::core&>);
-        CHECK(!core_.memory.alloc(1));
-        CHECK(!core_.schema.get_offset("CBaseEntity", "m_iHealth"));
-        CHECK(!core_.shared.has_shared_pointer("absent"));
-        CHECK(!core_.misc.is_hotreloaded());
+        CHECK(!core_ && !core_probe_);
     }
     ~test_extension() override
     {
-        if (core_.schema.get_offset("CBaseEntity", "m_iHealth")) {
-            CHECK(core_.misc.is_hotreloaded() == active->hot_reloaded);
+        if (core_) {
+            CHECK(core_->Schema().GetOffset("CBaseEntity", "m_iHealth"));
+            CHECK(core_->Misc().IsHotReloaded() == active->hot_reloaded);
             ++bound_destructions;
         }
         ++destroyed;
     }
-    std::string_view name() const noexcept override
+    std::string_view Name() const noexcept override
     {
-        CHECK(core_.schema.get_offset("CBaseEntity", "m_iHealth"));
-        CHECK(core_.misc.is_hotreloaded() == active->hot_reloaded);
+        CHECK(!core_ && !core_probe_); // Host APIs arrive only in OnLoad.
         if (mode == behavior::bad_name) return {"bad\0name", 8};
         return {"Example-not-part-of-name", 7}; // Deliberately not NUL-terminated at size().
     }
-    std::string_view version() const noexcept override { return "1.0.0"; }
-    sw::result<void> on_load() override
+    std::string_view Version() const noexcept override { return "1.0.0"; }
+    sw::Result<void> OnLoad(sw::Core core) override
     {
         ++loads;
-        CHECK(core_.misc.is_hotreloaded() == active->hot_reloaded);
+        core_ = core;
+        core_probe_.emplace(core);
+        CHECK(core.Misc().IsHotReloaded() == active->hot_reloaded);
         CHECK(active->name == "Example");
-        auto allocation = core_.memory.alloc(32);
+        auto allocation = core.Memory().Alloc(32);
         CHECK(allocation);
         buffer_ = *allocation;
-        auto hook = core_.memory.hook_address(reinterpret_cast<void*>(&original), &replacement);
+        auto hook = core.Memory().HookAddress(reinterpret_cast<void*>(&original), &replacement);
         CHECK(hook);
         hook_ = std::move(*hook);
         if (mode == behavior::error) return std::unexpected(std::string("expected detailed load error"));
         if (mode == behavior::load_exception) throw std::runtime_error("expected load exception");
         return {};
     }
-    void on_all_extensions_loaded() override
+    void OnAllExtensionsLoaded() override
     {
         ++notifications;
         CHECK(!active->initializing);
-        CHECK(core_.misc.is_hotreloaded() == active->hot_reloaded);
-        CHECK(core_.shared.has_shared_pointer("absent") && !*core_.shared.has_shared_pointer("absent"));
+        CHECK(core_);
+        CHECK(core_->Misc().IsHotReloaded() == active->hot_reloaded);
+        CHECK(core_->Shared().HasSharedPointer("absent") && !*core_->Shared().HasSharedPointer("absent"));
         if (mode == behavior::all_exception) throw std::runtime_error("expected notification exception");
     }
-    void on_unload() override
+    void OnUnload() override
     {
         ++unloads;
         CHECK(!active->initializing);
-        CHECK(core_.misc.is_hotreloaded() == active->hot_reloaded);
-        CHECK(core_.schema.get_offset("CBaseEntity", "m_iHealth"));
-        CHECK(core_.memory.free(buffer_));
+        CHECK(core_);
+        CHECK(core_->Misc().IsHotReloaded() == active->hot_reloaded);
+        CHECK(core_->Schema().GetOffset("CBaseEntity", "m_iHealth"));
+        CHECK(core_->Memory().Free(buffer_));
         buffer_ = nullptr;
         if (mode == behavior::unload_exception) throw std::runtime_error("expected unload exception");
     }
 private:
-    core_probe core_probe_{core_};
+    std::optional<sw::Core> core_;
+    std::optional<core_probe> core_probe_;
     void* buffer_ = nullptr;
-    sw::address_hook<function> hook_;
+    sw::AddressHook<function> hook_;
 };
 
 // Verify stable identity on an extension with no move-only resources of its own.
-class simple_extension final : public sw::extension {
+class simple_extension final : public sw::Extension {
 public:
-    std::string_view name() const noexcept override { return "Simple"; }
-    std::string_view version() const noexcept override { return "1.0.0"; }
-    sw::result<void> on_load() override { return {}; }
+    std::string_view Name() const noexcept override { return "Simple"; }
+    std::string_view Version() const noexcept override { return "1.0.0"; }
+    sw::Result<void> OnLoad(sw::Core core) override
+    {
+        auto offset = core.Schema().GetOffset("CBaseEntity", "m_iHealth");
+        if (!offset)
+            return std::unexpected(offset.error());
+        return {};
+    }
 };
 
 void check_error(const auto& result, std::initializer_list<std::string_view> fragments)
@@ -421,229 +431,229 @@ void check_error(const auto& result, std::initializer_list<std::string_view> fra
 void resource_contracts()
 {
     host host;
-    sw::memory memory(&host.memory);
+    sw::Memory memory(&host.memory);
     {
-        auto allocation = memory.alloc(16);
+        auto allocation = memory.Alloc(16);
         CHECK(allocation);
         void* pointer = *allocation;
         std::memset(pointer, 42, 16);
         auto* previous = pointer;
         host.fail_resize = true;
-        auto failed = memory.resize(pointer, 128);
+        auto failed = memory.Resize(pointer, 128);
         check_error(failed, {"memory.resize", "null", "128", "original allocation remains valid"});
         CHECK(pointer == previous && host.allocations.at(pointer) == 16);
         CHECK(static_cast<unsigned char*>(pointer)[0] == 42);
         host.fail_resize = false;
-        auto resized = memory.resize(pointer, 64);
+        auto resized = memory.Resize(pointer, 64);
         CHECK(resized && *resized != previous); // This fake allocator always moves.
         pointer = *resized;
         CHECK(host.allocations.at(pointer) == 64 && static_cast<unsigned char*>(pointer)[0] == 42);
-        CHECK(memory.free(pointer));
+        CHECK(memory.Free(pointer));
         CHECK(host.allocations.empty() && host.frees == 1);
     }
     {
         void* pointer;
         {
-            auto allocation = memory.alloc(4);
+            auto allocation = memory.Alloc(4);
             CHECK(allocation);
             pointer = *allocation;
         }
         CHECK(host.allocations.contains(pointer)); // The result does not own the allocation.
-        CHECK(memory.free(pointer));
+        CHECK(memory.Free(pointer));
     }
     {
-        auto zero = memory.alloc(0);
+        auto zero = memory.Alloc(0);
         CHECK(zero && *zero && host.last_alloc_size == 0 && host.alloc_calls == 3);
-        CHECK(memory.free(*zero));
-        auto fresh = memory.resize(nullptr, 8);
+        CHECK(memory.Free(*zero));
+        auto fresh = memory.Resize(nullptr, 8);
         CHECK(fresh && *fresh);
         const auto previous_calls = host.resize_calls;
-        auto empty = memory.resize(*fresh, 0);
+        auto empty = memory.Resize(*fresh, 0);
         CHECK(empty && *empty == nullptr);
         CHECK(host.resize_calls == previous_calls + 1 && host.last_resize_size == 0);
         CHECK(host.allocations.empty());
-        CHECK(memory.free(nullptr));
+        CHECK(memory.Free(nullptr));
     }
     {
-        auto hook = memory.hook_address(reinterpret_cast<void*>(&original), &replacement);
-        CHECK(hook && hook->original()(3) == 4);
+        auto hook = memory.HookAddress(reinterpret_cast<void*>(&original), &replacement);
+        CHECK(hook && hook->Original()(3) == 4);
         auto moved = std::move(*hook);
-        CHECK(!*hook && !hook->original());
-        auto target = memory.hook_address(reinterpret_cast<void*>(&original), &replacement);
+        CHECK(!*hook && !hook->Original());
+        auto target = memory.HookAddress(reinterpret_cast<void*>(&original), &replacement);
         CHECK(target);
         *target = std::move(moved);
-        CHECK(!moved && !moved.original());
+        CHECK(!moved && !moved.Original());
         CHECK(host.address_unhooks == 1);
     }
     CHECK(host.address_unhooks == 2);
     {
-        auto hook = memory.hook_vtable(&host.object, 2, &replacement);
-        CHECK(hook && hook->original()(0) == 1);
-        CHECK(hook->reset());
-        CHECK(!*hook && !hook->original());
-        CHECK(hook->reset());
+        auto hook = memory.HookVTable(&host.object, 2, &replacement);
+        CHECK(hook && hook->Original()(0) == 1);
+        CHECK(hook->Reset());
+        CHECK(!*hook && !hook->Original());
+        CHECK(hook->Reset());
     }
     CHECK(host.vtable_unhooks == 1);
     host.fail_hook = true;
-    CHECK(!memory.hook_address(reinterpret_cast<void*>(&original), &replacement));
+    CHECK(!memory.HookAddress(reinterpret_cast<void*>(&original), &replacement));
     host.fail_hook = false;
     host.broken_hook = true;
-    CHECK(!memory.hook_address(reinterpret_cast<void*>(&original), &replacement));
+    CHECK(!memory.HookAddress(reinterpret_cast<void*>(&original), &replacement));
     CHECK(host.address_hooks.empty() && host.address_unhooks == 3);
 }
 
 void lookup_contracts()
 {
     host host;
-    sw::memory memory(&host.memory);
-    sw::schema schema(&host.schema);
-    sw::shared shared(&host.shared);
-    CHECK(*memory.gamedata_get_offset("offset") == 0);
-    CHECK(!memory.gamedata_get_offset("absent"));
-    CHECK(memory.gamedata_resolve_signature("sig"));
-    CHECK(memory.resolve_signature("server", "sig"));
-    CHECK(*memory.find_vtable("server", "Entity") == &host.object);
-    CHECK(*memory.get_valve_interface("Example001") == &host.object);
-    CHECK(*schema.get_offset("CBaseEntity", "m_iHealth") == 0);
-    CHECK(!schema.get_offset("CBaseEntity", "absent"));
-    CHECK(schema.set_state_changed(&host.object, "CBaseEntity", "m_iHealth"));
+    sw::Memory memory(&host.memory);
+    sw::Schema schema(&host.schema);
+    sw::Shared shared(&host.shared);
+    CHECK(*memory.GameDataGetOffset("offset") == 0);
+    CHECK(!memory.GameDataGetOffset("absent"));
+    CHECK(memory.GameDataResolveSignature("sig"));
+    CHECK(memory.ResolveSignature("server", "sig"));
+    CHECK(*memory.FindVTable("server", "Entity") == &host.object);
+    CHECK(*memory.GetValveInterface("Example001") == &host.object);
+    CHECK(*schema.GetOffset("CBaseEntity", "m_iHealth") == 0);
+    CHECK(!schema.GetOffset("CBaseEntity", "absent"));
+    CHECK(schema.SetStateChanged(&host.object, "CBaseEntity", "m_iHealth"));
     CHECK(host.state_changes == 1);
-    CHECK(!schema.set_state_changed(nullptr, "CBaseEntity", "m_iHealth"));
-    CHECK(shared.set_shared_pointer("null", nullptr));
-    CHECK(*shared.has_shared_pointer("null"));
-    auto registered_null = shared.get_shared_pointer("null");
+    CHECK(!schema.SetStateChanged(nullptr, "CBaseEntity", "m_iHealth"));
+    CHECK(shared.SetSharedPointer("null", nullptr));
+    CHECK(*shared.HasSharedPointer("null"));
+    auto registered_null = shared.GetSharedPointer("null");
     CHECK(registered_null && *registered_null == nullptr);
-    CHECK(!shared.get_shared_pointer("absent"));
-    CHECK(!*shared.has_shared_pointer("absent"));
-    CHECK(shared.set_shared_pointer("object", &host.object));
-    CHECK(*shared.get_shared_pointer("object") == &host.object);
-    CHECK(shared.remove_shared_pointer("null"));
-    CHECK(!shared.remove_shared_pointer("null"));
+    CHECK(!shared.GetSharedPointer("absent"));
+    CHECK(!*shared.HasSharedPointer("absent"));
+    CHECK(shared.SetSharedPointer("object", &host.object));
+    CHECK(*shared.GetSharedPointer("object") == &host.object);
+    CHECK(shared.RemoveSharedPointer("null"));
+    CHECK(!shared.RemoveSharedPointer("null"));
     const std::string_view substring("object-suffix", 6);
-    CHECK(*shared.get_shared_pointer(substring) == &host.object);
-    CHECK(!shared.set_shared_pointer(std::string_view("bad\0key", 7), nullptr));
-    CHECK(!memory.gamedata_resolve_signature(std::string_view("sig\0suffix", 10)));
-    CHECK(!schema.get_offset("CBaseEntity", std::string_view("m_iHealth\0suffix", 16)));
-    CHECK(!sw::memory(nullptr).alloc(1));
-    CHECK(!sw::schema(nullptr).get_offset("Entity", "field"));
-    CHECK(!sw::shared(nullptr).get_shared_pointer("key"));
+    CHECK(*shared.GetSharedPointer(substring) == &host.object);
+    CHECK(!shared.SetSharedPointer(std::string_view("bad\0key", 7), nullptr));
+    CHECK(!memory.GameDataResolveSignature(std::string_view("sig\0suffix", 10)));
+    CHECK(!schema.GetOffset("CBaseEntity", std::string_view("m_iHealth\0suffix", 16)));
+    CHECK(!sw::Memory(nullptr).Alloc(1));
+    CHECK(!sw::Schema(nullptr).GetOffset("Entity", "field"));
+    CHECK(!sw::Shared(nullptr).GetSharedPointer("key"));
 }
 
 void error_contracts()
 {
     host host;
-    sw::memory memory(&host.memory);
-    sw::schema schema(&host.schema);
-    sw::shared shared(&host.shared);
+    sw::Memory memory(&host.memory);
+    sw::Schema schema(&host.schema);
+    sw::Shared shared(&host.shared);
     host.fail_alloc = true;
-    check_error(memory.alloc(1024), {"memory.alloc", "allocator returned null", "1024"});
+    check_error(memory.Alloc(1024), {"memory.alloc", "allocator returned null", "1024"});
     host.fail_alloc = false;
     host.broken_alloc = true;
-    check_error(memory.alloc(32), {"memory.alloc", "null", "32"});
+    check_error(memory.Alloc(32), {"memory.alloc", "null", "32"});
     host.broken_alloc = false;
 
     // Raw allocation needs only the allocator callback; cleanup is explicit.
     const auto saved_free = std::exchange(host.memory.free, nullptr);
-    auto allocated = memory.alloc(1);
+    auto allocated = memory.Alloc(1);
     CHECK(allocated && *allocated);
-    check_error(memory.free(*allocated), {"memory.free", "free callback is unavailable"});
+    check_error(memory.Free(*allocated), {"memory.free", "free callback is unavailable"});
     host.memory.free = saved_free;
-    CHECK(memory.free(*allocated));
+    CHECK(memory.Free(*allocated));
 
-    check_error(memory.gamedata_resolve_signature("absent"), {"gamedata_resolve_signature", "absent", "name does not exist"});
-    check_error(memory.gamedata_resolve_signature("null"), {"gamedata_resolve_signature", "null", "stored signature address is null"});
-    check_error(memory.gamedata_resolve_signature("broken"), {"gamedata_resolve_signature", "broken", "null"});
-    check_error(memory.gamedata_get_offset("absent"), {"gamedata_get_offset", "absent", "offset name does not exist"});
-    check_error(memory.resolve_signature("missing", "pattern"), {"resolve_signature", "missing", "pattern", "scan failed"});
-    check_error(memory.find_vtable("server", "MissingClass"), {"find_vtable", "MissingClass", "lookup failed"});
-    check_error(memory.get_valve_interface("Missing001"), {"get_valve_interface", "Missing001", "lookup failed"});
-    check_error(schema.get_offset("MissingClass", "field"), {"schema.get_offset", "MissingClass", "field", "class or field does not exist"});
-    check_error(schema.set_state_changed(&host.object, "CBaseEntity", "missing"),
+    check_error(memory.GameDataResolveSignature("absent"), {"gamedata_resolve_signature", "absent", "name does not exist"});
+    check_error(memory.GameDataResolveSignature("null"), {"gamedata_resolve_signature", "null", "stored signature address is null"});
+    check_error(memory.GameDataResolveSignature("broken"), {"gamedata_resolve_signature", "broken", "null"});
+    check_error(memory.GameDataGetOffset("absent"), {"gamedata_get_offset", "absent", "offset name does not exist"});
+    check_error(memory.ResolveSignature("missing", "pattern"), {"resolve_signature", "missing", "pattern", "scan failed"});
+    check_error(memory.FindVTable("server", "MissingClass"), {"find_vtable", "MissingClass", "lookup failed"});
+    check_error(memory.GetValveInterface("Missing001"), {"get_valve_interface", "Missing001", "lookup failed"});
+    check_error(schema.GetOffset("MissingClass", "field"), {"schema.get_offset", "MissingClass", "field", "class or field does not exist"});
+    check_error(schema.SetStateChanged(&host.object, "CBaseEntity", "missing"),
         {"set_state_changed", "CBaseEntity", "missing", "class or field does not exist"});
-    check_error(schema.set_state_changed(nullptr, "CBaseEntity", "m_iHealth"), {"set_state_changed", "object is null"});
-    check_error(shared.get_shared_pointer("absent"), {"shared.get_shared_pointer", "absent", "key does not exist"});
-    check_error(shared.remove_shared_pointer("absent"), {"shared.remove_shared_pointer", "absent", "key does not exist"});
+    check_error(schema.SetStateChanged(nullptr, "CBaseEntity", "m_iHealth"), {"set_state_changed", "object is null"});
+    check_error(shared.GetSharedPointer("absent"), {"shared.get_shared_pointer", "absent", "key does not exist"});
+    check_error(shared.RemoveSharedPointer("absent"), {"shared.remove_shared_pointer", "absent", "key does not exist"});
 
     const std::string_view invalid("bad\0text", 8);
-    check_error(memory.gamedata_resolve_signature(invalid), {"gamedata_resolve_signature", "name", "embedded NUL"});
-    check_error(memory.gamedata_get_offset(invalid), {"gamedata_get_offset", "name", "embedded NUL"});
-    check_error(memory.resolve_signature(invalid, "sig"), {"resolve_signature", "library", "embedded NUL"});
-    check_error(memory.resolve_signature("server", invalid), {"resolve_signature", "pattern", "embedded NUL"});
-    check_error(memory.find_vtable(invalid, "Entity"), {"find_vtable", "library", "embedded NUL"});
-    check_error(memory.find_vtable("server", invalid), {"find_vtable", "class_name", "embedded NUL"});
-    check_error(memory.get_valve_interface(invalid), {"get_valve_interface", "version", "embedded NUL"});
-    check_error(schema.get_offset(invalid, "field"), {"schema.get_offset", "class_name", "embedded NUL"});
-    check_error(schema.get_offset("Entity", invalid), {"schema.get_offset", "field_name", "embedded NUL"});
-    check_error(schema.set_state_changed(&host.object, invalid, "field"), {"set_state_changed", "class_name", "embedded NUL"});
-    check_error(schema.set_state_changed(&host.object, "Entity", invalid), {"set_state_changed", "field_name", "embedded NUL"});
-    check_error(shared.get_shared_pointer(invalid), {"shared.get_shared_pointer", "key", "embedded NUL"});
-    check_error(shared.set_shared_pointer(invalid, nullptr), {"shared.set_shared_pointer", "key", "embedded NUL"});
-    check_error(shared.has_shared_pointer(invalid), {"shared.has_shared_pointer", "key", "embedded NUL"});
-    check_error(shared.remove_shared_pointer(invalid), {"shared.remove_shared_pointer", "key", "embedded NUL"});
+    check_error(memory.GameDataResolveSignature(invalid), {"gamedata_resolve_signature", "name", "embedded NUL"});
+    check_error(memory.GameDataGetOffset(invalid), {"gamedata_get_offset", "name", "embedded NUL"});
+    check_error(memory.ResolveSignature(invalid, "sig"), {"resolve_signature", "library", "embedded NUL"});
+    check_error(memory.ResolveSignature("server", invalid), {"resolve_signature", "pattern", "embedded NUL"});
+    check_error(memory.FindVTable(invalid, "Entity"), {"find_vtable", "library", "embedded NUL"});
+    check_error(memory.FindVTable("server", invalid), {"find_vtable", "class_name", "embedded NUL"});
+    check_error(memory.GetValveInterface(invalid), {"get_valve_interface", "version", "embedded NUL"});
+    check_error(schema.GetOffset(invalid, "field"), {"schema.get_offset", "class_name", "embedded NUL"});
+    check_error(schema.GetOffset("Entity", invalid), {"schema.get_offset", "field_name", "embedded NUL"});
+    check_error(schema.SetStateChanged(&host.object, invalid, "field"), {"set_state_changed", "class_name", "embedded NUL"});
+    check_error(schema.SetStateChanged(&host.object, "Entity", invalid), {"set_state_changed", "field_name", "embedded NUL"});
+    check_error(shared.GetSharedPointer(invalid), {"shared.get_shared_pointer", "key", "embedded NUL"});
+    check_error(shared.SetSharedPointer(invalid, nullptr), {"shared.set_shared_pointer", "key", "embedded NUL"});
+    check_error(shared.HasSharedPointer(invalid), {"shared.has_shared_pointer", "key", "embedded NUL"});
+    check_error(shared.RemoveSharedPointer(invalid), {"shared.remove_shared_pointer", "key", "embedded NUL"});
 
-    check_error(memory.hook_address(nullptr, &replacement), {"hook_address", "address is null"});
-    check_error(memory.hook_address(reinterpret_cast<void*>(&original), static_cast<function>(nullptr)),
+    check_error(memory.HookAddress(nullptr, &replacement), {"hook_address", "address is null"});
+    check_error(memory.HookAddress(reinterpret_cast<void*>(&original), static_cast<function>(nullptr)),
         {"hook_address", "replacement function is null"});
-    check_error(memory.hook_vtable(nullptr, 2, &replacement), {"hook_vtable", "vtable address is null"});
-    check_error(memory.hook_vtable(&host.object, 2, static_cast<function>(nullptr)),
+    check_error(memory.HookVTable(nullptr, 2, &replacement), {"hook_vtable", "vtable address is null"});
+    check_error(memory.HookVTable(&host.object, 2, static_cast<function>(nullptr)),
         {"hook_vtable", "replacement function is null"});
-    check_error(memory.hook_vtable(&host.object, UINT32_MAX, &replacement), {"hook_vtable", "index", "exceeds INT_MAX"});
+    check_error(memory.HookVTable(&host.object, UINT32_MAX, &replacement), {"hook_vtable", "index", "exceeds INT_MAX"});
     host.fail_hook = true;
-    check_error(memory.hook_address(reinterpret_cast<void*>(&original), &replacement), {"hook_address", "trampoline is null", "not enabled"});
-    check_error(memory.hook_vtable(&host.object, 2, &replacement), {"hook_vtable", "trampoline is null", "not enabled"});
+    check_error(memory.HookAddress(reinterpret_cast<void*>(&original), &replacement), {"hook_address", "trampoline is null", "not enabled"});
+    check_error(memory.HookVTable(&host.object, 2, &replacement), {"hook_vtable", "trampoline is null", "not enabled"});
     host.fail_hook = false;
     host.broken_hook = true;
-    check_error(memory.hook_vtable(&host.object, 2, &replacement), {"hook_vtable", "success", "null"});
+    check_error(memory.HookVTable(&host.object, 2, &replacement), {"hook_vtable", "success", "null"});
     CHECK(host.vtable_hooks.empty() && host.vtable_unhooks == 1);
     host.broken_hook = false;
 
-    auto hook = memory.hook_address(reinterpret_cast<void*>(&original), &replacement);
+    auto hook = memory.HookAddress(reinterpret_cast<void*>(&original), &replacement);
     CHECK(hook);
     const auto saved_unhook = std::exchange(host.memory.unhook_address,
         +[](const sw_memory*, sw_hook_handle) -> sw_status { return SW_E_INVALID_ARG; });
-    check_error(hook->reset(), {"unhook_address", "interface or hook handle is null"});
-    CHECK(*hook && hook->original());
+    check_error(hook->Reset(), {"unhook_address", "interface or hook handle is null"});
+    CHECK(*hook && hook->Original());
     host.memory.unhook_address = +[](const sw_memory*, sw_hook_handle) -> sw_status {
         throw std::runtime_error("unhook exception details");
     };
-    check_error(hook->reset(), {"unhook_address", "unhook exception details"});
+    check_error(hook->Reset(), {"unhook_address", "unhook exception details"});
     host.memory.unhook_address = saved_unhook;
-    CHECK(hook->reset());
+    CHECK(hook->Reset());
 
     sw_memory absent_memory{};
     sw_schema absent_schema{};
     sw_shared absent_shared{};
     for (const auto* api : {static_cast<const sw_memory*>(nullptr), static_cast<const sw_memory*>(&absent_memory)}) {
-        const sw::memory absent(api);
-        check_error(absent.alloc(1), {"memory.alloc", "unavailable"});
-        check_error(absent.free(nullptr), {"memory.free", "unavailable"});
-        check_error(absent.resize(nullptr, 1), {"memory.resize", "unavailable"});
-        check_error(absent.gamedata_resolve_signature("sig"), {"gamedata_resolve_signature", "unavailable"});
-        check_error(absent.gamedata_get_offset("offset"), {"gamedata_get_offset", "unavailable"});
-        check_error(absent.resolve_signature("server", "sig"), {"resolve_signature", "unavailable"});
-        check_error(absent.find_vtable("server", "Entity"), {"find_vtable", "unavailable"});
-        check_error(absent.get_valve_interface("Example001"), {"get_valve_interface", "unavailable"});
-        check_error(absent.hook_address(reinterpret_cast<void*>(&original), &replacement), {"hook_address", "unavailable"});
-        check_error(absent.hook_vtable(&host.object, 2, &replacement), {"hook_vtable", "unavailable"});
+        const sw::Memory absent(api);
+        check_error(absent.Alloc(1), {"memory.alloc", "unavailable"});
+        check_error(absent.Free(nullptr), {"memory.free", "unavailable"});
+        check_error(absent.Resize(nullptr, 1), {"memory.resize", "unavailable"});
+        check_error(absent.GameDataResolveSignature("sig"), {"gamedata_resolve_signature", "unavailable"});
+        check_error(absent.GameDataGetOffset("offset"), {"gamedata_get_offset", "unavailable"});
+        check_error(absent.ResolveSignature("server", "sig"), {"resolve_signature", "unavailable"});
+        check_error(absent.FindVTable("server", "Entity"), {"find_vtable", "unavailable"});
+        check_error(absent.GetValveInterface("Example001"), {"get_valve_interface", "unavailable"});
+        check_error(absent.HookAddress(reinterpret_cast<void*>(&original), &replacement), {"hook_address", "unavailable"});
+        check_error(absent.HookVTable(&host.object, 2, &replacement), {"hook_vtable", "unavailable"});
     }
     for (const auto* api : {static_cast<const sw_schema*>(nullptr), static_cast<const sw_schema*>(&absent_schema)}) {
-        check_error(sw::schema(api).get_offset("Entity", "field"), {"schema.get_offset", "unavailable"});
-        check_error(sw::schema(api).set_state_changed(&host.object, "Entity", "field"), {"set_state_changed", "unavailable"});
+        check_error(sw::Schema(api).GetOffset("Entity", "field"), {"schema.get_offset", "unavailable"});
+        check_error(sw::Schema(api).SetStateChanged(&host.object, "Entity", "field"), {"set_state_changed", "unavailable"});
     }
     for (const auto* api : {static_cast<const sw_shared*>(nullptr), static_cast<const sw_shared*>(&absent_shared)}) {
-        const sw::shared absent(api);
-        check_error(absent.get_shared_pointer("key"), {"shared.get_shared_pointer", "unavailable"});
-        check_error(absent.set_shared_pointer("key", nullptr), {"shared.set_shared_pointer", "unavailable"});
-        check_error(absent.has_shared_pointer("key"), {"shared.has_shared_pointer", "unavailable"});
-        check_error(absent.remove_shared_pointer("key"), {"shared.remove_shared_pointer", "unavailable"});
+        const sw::Shared absent(api);
+        check_error(absent.GetSharedPointer("key"), {"shared.get_shared_pointer", "unavailable"});
+        check_error(absent.SetSharedPointer("key", nullptr), {"shared.set_shared_pointer", "unavailable"});
+        check_error(absent.HasSharedPointer("key"), {"shared.has_shared_pointer", "unavailable"});
+        check_error(absent.RemoveSharedPointer("key"), {"shared.remove_shared_pointer", "unavailable"});
     }
 
     host.offset_status = SW_E_BUFFER_TOO_SMALL;
-    check_error(memory.gamedata_get_offset("offset"), {"gamedata_get_offset", "buffer is too small"});
+    check_error(memory.GameDataGetOffset("offset"), {"gamedata_get_offset", "buffer is too small"});
     host.offset_status = SW_E_INVALID_OPERATION;
-    check_error(memory.gamedata_get_offset("offset"), {"gamedata_get_offset", "not allowed in the current state"});
+    check_error(memory.GameDataGetOffset("offset"), {"gamedata_get_offset", "not allowed in the current state"});
     host.offset_status = -91;
-    check_error(memory.gamedata_get_offset("offset"), {"gamedata_get_offset", "unexpected status -91"});
+    check_error(memory.GameDataGetOffset("offset"), {"gamedata_get_offset", "unexpected status -91"});
 }
 
 void lifecycle_contracts()
@@ -654,7 +664,7 @@ void lifecycle_contracts()
         reset_counts(value);
         host host;
         host.hot_reloaded = hot_reloaded;
-        const auto status = sw::run_extension<test_extension>(&host.context);
+        const auto status = sw::RunExtension<test_extension>(&host.context);
         if (value == behavior::bad_name) CHECK(status == SW_E_INVALID_ARG && loads == 0);
         else if (value == behavior::error) CHECK(status == SW_E_FAILED);
         else if (value == behavior::load_exception) CHECK(status == SW_E_FAILED);
@@ -667,7 +677,8 @@ void lifecycle_contracts()
             CHECK(notifications == 2);
         }
         host.unload();
-        CHECK(destroyed == 1 && bound_destructions == 1 && member_bound_destructions == 1);
+        const int saved_views = value == behavior::bad_name ? 0 : 1;
+        CHECK(destroyed == 1 && bound_destructions == saved_views && member_bound_destructions == saved_views);
         CHECK(unloads == (value == behavior::bad_name ? 0 : 1));
         CHECK(host.allocations.empty() && host.address_hooks.empty());
         CHECK(host.hot_queries == 1); // Later callbacks read the cached state.
@@ -678,57 +689,68 @@ void lifecycle_contracts()
         reset_counts();
         host host;
         host.unload_registration_status = SW_E_FAILED;
-        CHECK(sw::run_extension<test_extension>(&host.context) == SW_E_FAILED);
-        CHECK(destroyed == 1 && bound_destructions == 1 && loads == 0 && unloads == 0);
-        CHECK(member_bound_destructions == 1);
+        CHECK(sw::RunExtension<test_extension>(&host.context) == SW_E_FAILED);
+        CHECK(destroyed == 1 && bound_destructions == 0 && loads == 0 && unloads == 0);
+        CHECK(member_bound_destructions == 0);
         CHECK(!host.unload_fn);
     }
     {
         reset_counts();
         host host;
         host.all_registration_status = SW_E_FAILED;
-        CHECK(sw::run_extension<test_extension>(&host.context) == SW_E_FAILED);
+        CHECK(sw::RunExtension<test_extension>(&host.context) == SW_E_FAILED);
         CHECK(destroyed == 0 && loads == 0);
         host.unload();
-        CHECK(destroyed == 1 && bound_destructions == 1 && unloads == 0);
-        CHECK(member_bound_destructions == 1);
+        CHECK(destroyed == 1 && bound_destructions == 0 && unloads == 0);
+        CHECK(member_bound_destructions == 0);
     }
     {
         reset_counts();
         host host;
         host.metadata_status = -42;
-        CHECK(sw::run_extension<test_extension>(&host.context) == -42);
+        CHECK(sw::RunExtension<test_extension>(&host.context) == -42);
         CHECK(loads == 0 && destroyed == 0);
         host.unload();
-        CHECK(destroyed == 1 && bound_destructions == 1 && unloads == 0);
-        CHECK(member_bound_destructions == 1);
+        CHECK(destroyed == 1 && bound_destructions == 0 && unloads == 0);
+        CHECK(member_bound_destructions == 0);
     }
     {
         reset_counts();
         host host;
         host.query_status = SW_E_FAILED;
-        CHECK(sw::run_extension<test_extension>(&host.context) == SW_E_FAILED);
+        CHECK(sw::RunExtension<test_extension>(&host.context) == SW_E_FAILED);
         CHECK(!host.unload_fn && loads == 0 && destroyed == 0);
-        CHECK(sw::run_extension<test_extension>(nullptr) == SW_E_INVALID_ARG);
+        CHECK(sw::RunExtension<test_extension>(nullptr) == SW_E_INVALID_ARG);
         sw_init_context empty{};
-        CHECK(sw::run_extension<test_extension>(&empty) == SW_E_INVALID_ARG);
+        CHECK(sw::RunExtension<test_extension>(&empty) == SW_E_INVALID_ARG);
+    }
+    {
+        // Saving a core view is optional for an extension that needs it only in OnLoad.
+        host host;
+        CHECK(sw::RunExtension<simple_extension>(&host.context) == SW_OK);
+        host.notify();
+        host.unload();
+        CHECK(host.hot_queries == 1 && !host.unload_fn && !host.all_fn);
     }
 }
 
 } // namespace
 
-static_assert(std::is_same_v<sw::result<void>::error_type, std::string>);
-static_assert(std::is_same_v<decltype(std::declval<sw::memory>().alloc(1)), sw::result<void*>>);
-static_assert(std::is_same_v<decltype((std::declval<const sw::core&>().memory)), const sw::memory&>);
-static_assert(std::is_same_v<decltype((std::declval<const sw::core&>().schema)), const sw::schema&>);
-static_assert(std::is_same_v<decltype((std::declval<const sw::core&>().shared)), const sw::shared&>);
-static_assert(std::is_same_v<decltype((std::declval<const sw::core&>().misc)), const sw::misc&>);
+static_assert(std::is_same_v<sw::Result<void>::error_type, std::string>);
+static_assert(std::is_same_v<decltype(std::declval<sw::Memory>().Alloc(1)), sw::Result<void*>>);
+static_assert(std::is_same_v<decltype(std::declval<const sw::Core&>().Memory()), const sw::Memory&>);
+static_assert(std::is_same_v<decltype(std::declval<const sw::Core&>().Schema()), const sw::Schema&>);
+static_assert(std::is_same_v<decltype(std::declval<const sw::Core&>().Shared()), const sw::Shared&>);
+static_assert(std::is_same_v<decltype(std::declval<const sw::Core&>().Misc()), const sw::Misc&>);
+static_assert(std::is_same_v<decltype(&sw::Extension::OnLoad), sw::Result<void> (sw::Extension::*)(sw::Core)>);
+static_assert(std::is_nothrow_copy_constructible_v<sw::Core>);
+static_assert(std::is_nothrow_copy_assignable_v<sw::Core>);
 static_assert(!std::is_copy_constructible_v<simple_extension>);
 static_assert(!std::is_copy_assignable_v<simple_extension>);
 static_assert(!std::is_move_constructible_v<simple_extension>);
 static_assert(!std::is_move_assignable_v<simple_extension>);
-static_assert(!std::is_copy_constructible_v<sw::address_hook<function>>);
-static_assert(!std::is_same_v<sw::address_hook<function>, sw::vtable_hook<function>>);
+static_assert(!std::is_copy_constructible_v<sw::AddressHook<function>>);
+static_assert(!std::is_same_v<sw::AddressHook<function>, sw::VTableHook<function>>);
 
 int main()
 {

@@ -3,10 +3,10 @@
 namespace sw {
 
 /** @brief Miscellaneous extension state captured during initialization. */
-class misc {
+class Misc {
 public:
     /** @param hot_reloaded State read from sw_init::is_hotreloaded during initialization. */
-    explicit misc(bool hot_reloaded) noexcept : hot_reloaded_(hot_reloaded) {}
+    explicit Misc(bool hot_reloaded) noexcept : hot_reloaded_(hot_reloaded) {}
 
     /**
      * @brief Whether this extension was hot reloaded manually.
@@ -16,7 +16,7 @@ public:
      * it does not call the initialization interface after initialization finishes.
      * @see sw_init::is_hotreloaded
      */
-    [[nodiscard]] bool is_hotreloaded() const noexcept { return hot_reloaded_; }
+    [[nodiscard]] bool IsHotReloaded() const noexcept { return hot_reloaded_; }
 
 private:
     bool hot_reloaded_;

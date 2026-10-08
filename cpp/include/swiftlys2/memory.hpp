@@ -11,7 +11,7 @@
 
 namespace sw {
 
-class memory;
+class Memory;
 
 namespace detail {
 
@@ -23,25 +23,25 @@ namespace detail {
  * Release the hook while the underlying memory interface is still alive.
  */
 template<class Fn, bool Vtable>
-class basic_hook {
+class BasicHook {
     static_assert(std::is_pointer_v<Fn> && std::is_function_v<std::remove_pointer_t<Fn>>,
                   "Hook signatures must be function pointer types.");
 public:
     /** @brief Construct an empty hook with no handle or original trampoline. */
-    basic_hook() noexcept = default;
+    BasicHook() noexcept = default;
     /** @brief Disable and destroy a live hook using its matching unhook callback. */
-    ~basic_hook() { reset_noexcept(); }
-    basic_hook(const basic_hook&) = delete;
-    basic_hook& operator=(const basic_hook&) = delete;
+    ~BasicHook() { reset_noexcept(); }
+    BasicHook(const BasicHook&) = delete;
+    BasicHook& operator=(const BasicHook&) = delete;
 
     /** @brief Transfer ownership and leave the source empty. */
-    basic_hook(basic_hook&& other) noexcept
+    BasicHook(BasicHook&& other) noexcept
         : api_(std::exchange(other.api_, nullptr)),
           handle_(std::exchange(other.handle_, nullptr)),
           original_(std::exchange(other.original_, nullptr)) {}
 
     /** @brief Release the current hook, then transfer ownership from the source. */
-    basic_hook& operator=(basic_hook&& other) noexcept
+    BasicHook& operator=(BasicHook&& other) noexcept
     {
         if (this != &other) {
             reset_noexcept();
@@ -59,7 +59,7 @@ public:
      * @return The original function, or nullptr for an empty hook.
      * @note The function is invalid after the hook is removed.
      */
-    [[nodiscard]] Fn original() const noexcept { return original_; }
+    [[nodiscard]] Fn Original() const noexcept { return original_; }
 
     /**
      * @brief Disable and destroy the hook; do nothing if it is already empty.
@@ -69,7 +69,7 @@ public:
      * @see sw_memory::unhook_address
      * @see sw_memory::unhook_vtable
      */
-    [[nodiscard]] result<void> reset()
+    [[nodiscard]] Result<void> Reset()
     {
         if (!handle_)
             return {};
@@ -96,11 +96,11 @@ private:
     // Formatting string errors can allocate; destruction and moves must not throw.
     void reset_noexcept() noexcept
     {
-        try { (void)reset(); } catch (...) {}
+        try { (void)Reset(); } catch (...) {}
     }
 
-    friend class ::sw::memory;
-    basic_hook(const sw_memory* api, sw_hook_handle handle, Fn original) noexcept
+    friend class ::sw::Memory;
+    BasicHook(const sw_memory* api, sw_hook_handle handle, Fn original) noexcept
         : api_(api), handle_(handle), original_(original) {}
     const sw_memory* api_ = nullptr;
     sw_hook_handle handle_ = nullptr;
@@ -111,10 +111,10 @@ private:
 
 /** @brief Owner of a function address hook, released with unhook_address. */
 template<class Fn>
-using address_hook = detail::basic_hook<Fn, false>;
+using AddressHook = detail::BasicHook<Fn, false>;
 /** @brief Owner of a virtual function hook, released with unhook_vtable. */
 template<class Fn>
-using vtable_hook = detail::basic_hook<Fn, true>;
+using VTableHook = detail::BasicHook<Fn, true>;
 
 /**
  * @brief Memory allocation, hooks, and address lookup APIs.
@@ -122,10 +122,10 @@ using vtable_hook = detail::basic_hook<Fn, true>;
  * String arguments are copied to terminated strings for the host.
  * @see sw_memory
  */
-class memory {
+class Memory {
 public:
     /** @param api Borrowed host memory interface, valid until extension unload. */
-    explicit memory(const sw_memory* api) noexcept : api_(api) {}
+    explicit Memory(const sw_memory* api) noexcept : api_(api) {}
 
     /**
      * @brief Allocate memory through the game's allocator.
@@ -133,11 +133,11 @@ public:
      * @return A non-null allocation, or an error if the allocator returns null
      * or the required memory interface or callback is unavailable.
      * @note Memory is not initialized. The caller owns the bytes and must release
-     * them with free(), or resize them with resize(). Zero-size behavior follows
+     * them with Free(), or resize them with Resize(). Zero-size behavior follows
      * the game's allocator.
      * @see sw_memory::alloc
      */
-    [[nodiscard]] result<void*> alloc(std::size_t size) const
+    [[nodiscard]] Result<void*> Alloc(std::size_t size) const
     {
         if (!api_ || !api_->alloc)
             return detail::fail("memory.alloc: memory interface or alloc callback is unavailable");
@@ -152,11 +152,11 @@ public:
 
     /**
      * @brief Release memory allocated through the game's allocator.
-     * @param pointer Live allocation returned by alloc() or resize(), or nullptr.
+     * @param pointer Live allocation returned by Alloc() or Resize(), or nullptr.
      * @return Success, or an error if the required interface or callback is unavailable.
      * @see sw_memory::free
      */
-    [[nodiscard]] result<void> free(void* pointer) const
+    [[nodiscard]] Result<void> Free(void* pointer) const
     {
         if (!api_ || !api_->free)
             return detail::fail("memory.free: memory interface or free callback is unavailable");
@@ -165,7 +165,7 @@ public:
 
     /**
      * @brief Resize an allocation through the game's allocator.
-     * @param pointer Live allocation returned by alloc() or resize(), or nullptr
+     * @param pointer Live allocation returned by Alloc() or Resize(), or nullptr
      * to allocate a new block.
      * @param size New size in bytes.
      * @return The allocator's result, or an error if a nonzero allocation fails
@@ -176,7 +176,7 @@ public:
      * follows the game's allocator; a successful result may contain nullptr.
      * @see sw_memory::resize
      */
-    [[nodiscard]] result<void*> resize(void* pointer, std::size_t size) const
+    [[nodiscard]] Result<void*> Resize(void* pointer, std::size_t size) const
     {
         if (!api_ || !api_->resize)
             return detail::fail("memory.resize: memory interface or resize callback is unavailable");
@@ -201,7 +201,7 @@ public:
      * @see sw_memory::hook_address
      */
     template<class Fn>
-    [[nodiscard]] result<address_hook<Fn>> hook_address(void* address, Fn replacement) const
+    [[nodiscard]] Result<AddressHook<Fn>> HookAddress(void* address, Fn replacement) const
     {
         if (!api_ || !api_->hook_address || !api_->unhook_address)
             return detail::fail("memory.hook_address: memory interface, hook_address or unhook_address callback is unavailable");
@@ -221,7 +221,7 @@ public:
                 (void)api_->unhook_address(api_, handle);
             return detail::fail("memory.hook_address: host returned success with a null hook handle or original trampoline");
         }
-        return address_hook<Fn>(api_, handle, reinterpret_cast<Fn>(original));
+        return AddressHook<Fn>(api_, handle, reinterpret_cast<Fn>(original));
     }
 
     /**
@@ -238,7 +238,7 @@ public:
      * @see sw_memory::hook_vtable
      */
     template<class Fn>
-    [[nodiscard]] result<vtable_hook<Fn>> hook_vtable(
+    [[nodiscard]] Result<VTableHook<Fn>> HookVTable(
         void* vtable, std::uint32_t index, Fn replacement) const
     {
         if (!api_ || !api_->hook_vtable || !api_->unhook_vtable)
@@ -261,7 +261,7 @@ public:
                 (void)api_->unhook_vtable(api_, handle);
             return detail::fail("memory.hook_vtable: host returned success with a null hook handle or original trampoline");
         }
-        return vtable_hook<Fn>(api_, handle, reinterpret_cast<Fn>(original));
+        return VTableHook<Fn>(api_, handle, reinterpret_cast<Fn>(original));
     }
 
     /**
@@ -272,7 +272,7 @@ public:
      * @note The address is borrowed; do not release it with the game allocator.
      * @see sw_memory::gamedata_resolve_signature
      */
-    [[nodiscard]] result<void*> gamedata_resolve_signature(std::string_view name) const
+    [[nodiscard]] Result<void*> GameDataResolveSignature(std::string_view name) const
     {
         if (!api_ || !api_->gamedata_resolve_signature)
             return detail::fail("memory.gamedata_resolve_signature: memory interface or gamedata_resolve_signature callback is unavailable");
@@ -295,7 +295,7 @@ public:
      * not exist or a required interface or callback is unavailable.
      * @see sw_memory::gamedata_get_offset
      */
-    [[nodiscard]] result<std::uint32_t> gamedata_get_offset(std::string_view name) const
+    [[nodiscard]] Result<std::uint32_t> GameDataGetOffset(std::string_view name) const
     {
         if (!api_ || !api_->gamedata_get_offset)
             return detail::fail("memory.gamedata_get_offset: memory interface or gamedata_get_offset callback is unavailable");
@@ -319,7 +319,7 @@ public:
      * @note The address is borrowed.
      * @see sw_memory::resolve_signature
      */
-    [[nodiscard]] result<void*> resolve_signature(
+    [[nodiscard]] Result<void*> ResolveSignature(
         std::string_view library, std::string_view pattern) const
     {
         if (!api_ || !api_->resolve_signature)
@@ -346,9 +346,9 @@ public:
      * is resolved, or a required interface or callback is unavailable.
      * @note The table belongs to the library and must not be freed.
      * @see sw_memory::find_vtable
-     * @see hook_vtable
+     * @see HookVTable
      */
-    [[nodiscard]] result<void*> find_vtable(
+    [[nodiscard]] Result<void*> FindVTable(
         std::string_view library, std::string_view class_name) const
     {
         if (!api_ || !api_->find_vtable)
@@ -375,7 +375,7 @@ public:
      * @note The interface belongs to the game and must not be freed.
      * @see sw_memory::get_valve_interface
      */
-    [[nodiscard]] result<void*> get_valve_interface(std::string_view version) const
+    [[nodiscard]] Result<void*> GetValveInterface(std::string_view version) const
     {
         if (!api_ || !api_->get_valve_interface)
             return detail::fail("memory.get_valve_interface: memory interface or get_valve_interface callback is unavailable");

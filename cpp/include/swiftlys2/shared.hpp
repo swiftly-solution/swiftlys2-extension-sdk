@@ -13,10 +13,10 @@ namespace sw {
  * String keys are copied to terminated strings for the host.
  * @see sw_shared
  */
-class shared {
+class Shared {
 public:
     /** @param api Borrowed host shared pointer interface, valid until extension unload. */
-    explicit shared(const sw_shared* api) noexcept : api_(api) {}
+    explicit Shared(const sw_shared* api) noexcept : api_(api) {}
 
     /**
      * @brief Get a pointer from the host's shared pointer registry.
@@ -26,7 +26,7 @@ public:
      * @note The returned pointer is borrowed; ownership is not transferred.
      * @see sw_shared::get_shared_pointer
      */
-    [[nodiscard]] result<void*> get_shared_pointer(std::string_view key) const
+    [[nodiscard]] Result<void*> GetSharedPointer(std::string_view key) const
     {
         if (!api_ || !api_->get_shared_pointer)
             return detail::fail("shared.get_shared_pointer: shared interface or get_shared_pointer callback is unavailable");
@@ -49,7 +49,7 @@ public:
      * destroying their values.
      * @see sw_shared::set_shared_pointer
      */
-    [[nodiscard]] result<void> set_shared_pointer(std::string_view key, void* pointer) const
+    [[nodiscard]] Result<void> SetSharedPointer(std::string_view key, void* pointer) const
     {
         if (!api_ || !api_->set_shared_pointer)
             return detail::fail("shared.set_shared_pointer: shared interface or set_shared_pointer callback is unavailable");
@@ -69,7 +69,7 @@ public:
      * @note A key whose value is nullptr still exists.
      * @see sw_shared::has_shared_pointer
      */
-    [[nodiscard]] result<bool> has_shared_pointer(std::string_view key) const
+    [[nodiscard]] Result<bool> HasSharedPointer(std::string_view key) const
     {
         if (!api_ || !api_->has_shared_pointer)
             return detail::fail("shared.has_shared_pointer: shared interface or has_shared_pointer callback is unavailable");
@@ -90,7 +90,7 @@ public:
      * @note Removing an entry does not free the pointed-to object.
      * @see sw_shared::remove_shared_pointer
      */
-    [[nodiscard]] result<void> remove_shared_pointer(std::string_view key) const
+    [[nodiscard]] Result<void> RemoveSharedPointer(std::string_view key) const
     {
         if (!api_ || !api_->remove_shared_pointer)
             return detail::fail("shared.remove_shared_pointer: shared interface or remove_shared_pointer callback is unavailable");

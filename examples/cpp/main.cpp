@@ -1,42 +1,49 @@
 #include <swiftlys2/sdk.hpp>
 
 #include <cstdio>
-#include <cstring>
+#include <optional>
 #include <print>
 
-class ExampleExtension final : public sw::extension {
+class ExampleExtension final : public sw::Extension {
 public:
-    std::string_view name() const noexcept override
+    std::string_view Name() const noexcept override
     { return "Example"; }
 
-    std::string_view version() const noexcept override
+    std::string_view Version() const noexcept override
     { return "1.0.0"; }
 
-    std::string_view author() const noexcept override
+    std::string_view Author() const noexcept override
     { return "Example author"; }
 
-    std::string_view description() const noexcept override
+    std::string_view Description() const noexcept override
     { return "C++ SDK example"; }
 
-    sw::result<void> on_load() override
+    sw::Result<void> OnLoad(sw::Core core) override
     {
-
-        auto offset = core_.schema.get_offset("CBaseEntity", "m_iHealth");
+        // Keep our own copy for later callbacks; never keep the parameter's address.
+        core_ = core;
+        auto offset = core.Schema().GetOffset("CBaseEntity", "m_iHealth");
+        if (!offset)
+            return std::unexpected(offset.error());
         std::print("Offset {}\n", *offset);
 
+        auto allocation = core.Memory().Alloc(1024);
+        if (!allocation)
+            return std::unexpected(allocation.error());
+        buffer_ = *allocation;
         return {};
     }
 
-    void on_all_extensions_loaded() override
+    void OnAllExtensionsLoaded() override
     {
-        auto available = core_.shared.has_shared_pointer("example.service.v1");
+        auto available = core_->Shared().HasSharedPointer("example.service.v1");
         if (available)
             std::printf("Example service available: %d\n", static_cast<int>(*available));
     }
 
-    void on_unload() override
+    void OnUnload() override
     {
-        auto released = core_.memory.free(buffer_);
+        auto released = core_->Memory().Free(buffer_);
         if (!released)
             std::fprintf(stderr, "%s\n", released.error().c_str());
         else
@@ -44,7 +51,8 @@ public:
     }
 
 private:
-    // Released in on_unload, including after failed initialization.
+    std::optional<sw::Core> core_;
+    // Released in OnUnload, including after failed initialization.
     void* buffer_ = nullptr;
 };
 

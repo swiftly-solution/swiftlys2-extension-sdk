@@ -80,16 +80,32 @@ Clone this repository into your project as `swiftlys2-extension-sdk`, then inclu
 #include <swiftlys2/sdk.hpp>
 ```
 
-Derive your extension from `sw::extension` and use `SW_DEFINE_EXTENSION` in one
+Derive your extension from `sw::Extension` and use `SW_DEFINE_EXTENSION` in one
 `.cpp` file. See [the C++ example](examples/cpp/main.cpp).
 
-Implement `name()`, `version()`, and `on_load()`. All lifecycle callbacks take no
-arguments; access the APIs through the inherited protected `const sw::core& core_`,
-such as `core_.memory.alloc(1024)`. It refers to storage owned by the extension and
-can be passed to functions or objects accepting `const sw::core&`. Extensions
-cannot be copied or moved. The SDK binds the interfaces after construction,
-before metadata getters and callbacks. The APIs remain valid through unload and
-derived member destruction; they are unavailable during construction.
+Implement `Name()`, `Version()`, and `OnLoad(sw::Core core)`. The SDK passes a
+copyable host API view by value to `OnLoad`; access its interfaces through
+`Memory()`, `Schema()`, `Shared()`, and `Misc()`, such as
+`core.Schema().GetOffset("CBaseEntity", "m_iHealth")` or `core.Memory().Alloc(1024)`.
+`Misc().IsHotReloaded()` returns the hot reload state cached during initialization.
+
+`Extension` does not store or expose a core member. If `OnAllExtensionsLoaded()`,
+`OnUnload()`, or member destructors need the APIs, save your own `sw::Core` copy,
+for example in a `std::optional<sw::Core>`. Do not retain a pointer or reference to
+the `OnLoad` parameter. Copying the view does not copy or own the host interfaces
+or extend their lifetime. The APIs remain valid during `OnUnload()` and extension
+destruction, including after a failed or throwing `OnLoad`, and must not be used
+after unload. Save the view before initialization work that may fail if cleanup
+will need it.
+
+`OnAllExtensionsLoaded()` and `OnUnload()` take no arguments. If initialization
+fails before `OnLoad` begins, only destruction runs and no core view has been
+supplied. Host APIs are unavailable in constructors and metadata getters.
+Extensions cannot be copied or moved.
+
+C++ types and public functions use PascalCase. Parameters and local variables
+use snake_case; internal members use snake_case with a trailing underscore.
+The C ABI keeps its existing names.
 
 ## Xmake
 
