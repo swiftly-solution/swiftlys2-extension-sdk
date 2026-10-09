@@ -1,0 +1,4 @@
+{
+    global: sw_extension_init;
+    local: *;
+};

@@ -8,6 +8,7 @@
 - [C++](#c-1)
   - [Xmake](#xmake-1)
   - [CMake](#cmake-1)
+- [SteamRT3 compatibility CI](#steamrt3-compatibility-ci)
 
 # Requirements
 
@@ -177,3 +178,18 @@ Build:
 cmake -S . -B build/cmake
 cmake --build build/cmake
 ```
+
+# SteamRT3 compatibility CI
+
+[SteamRT3 compatibility](.github/workflows/steamrt3.yml) builds with GCC 14 in a
+pinned Valve SDK image and runs the binaries in the matching Platform image.
+It checks C/C++ extension loading and cleanup through a mock C ABI host, the SDK
+contract tests, and `std::expected`/`std::print`. The C++26 job additionally checks
+saturation arithmetic supported by GCC 14; it does not certify all C++26 features.
+
+SDK-default and explicit static `libstdc++` builds must pass. This SDK snapshot's
+GCC 14 defaults to static C++ runtime libraries. Forced linking against the
+Platform's shared `libstdc++` is an informational compatibility comparison.
+Each run uploads binaries, dependency reports and logs, and displays
+the results in its summary. These checks cover runtime compatibility, not CS2
+game interfaces. The workflow runs on pushes, pull requests and manual dispatch.

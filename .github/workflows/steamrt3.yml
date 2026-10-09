@@ -1,0 +1,74 @@
+name: SteamRT3 compatibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: SteamRT3 / ${{ matrix.label }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: C++23
+            standard: c++23
+          - label: C++26 subset (GCC 14)
+            standard: c++2c
+    env:
+      # Keep the SDK and Platform on the same reproducible Valve snapshot.
+      STEAMRT_VERSION: 3.0.20260805.254768
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pull matching SDK and Platform images
+        run: |
+          docker pull "registry.gitlab.steamos.cloud/steamrt/sniper/sdk:$STEAMRT_VERSION"
+          docker pull "registry.gitlab.steamos.cloud/steamrt/sniper/platform:$STEAMRT_VERSION"
+          mkdir -p build/steamrt3
+          docker image inspect \
+            "registry.gitlab.steamos.cloud/steamrt/sniper/sdk:$STEAMRT_VERSION" \
+            "registry.gitlab.steamos.cloud/steamrt/sniper/platform:$STEAMRT_VERSION" \
+            > build/steamrt3/images.json
+      - name: Build with GCC 14 inside the SDK
+        env:
+          CXX_STANDARD: ${{ matrix.standard }}
+        run: |
+          set -o pipefail
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/build/steamrt3,dst=/out" \
+            --workdir /src \
+            "registry.gitlab.steamos.cloud/steamrt/sniper/sdk:$STEAMRT_VERSION" \
+            bash tests/steamrt3/build.sh "$CXX_STANDARD" /out \
+            2>&1 | tee build/steamrt3/build.log
+      - name: Load and execute in the Platform runtime
+        run: |
+          set -o pipefail
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/build/steamrt3,dst=/out" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/tests/steamrt3/run.sh,dst=/run-tests.sh,readonly" \
+            "registry.gitlab.steamos.cloud/steamrt/sniper/platform:$STEAMRT_VERSION" \
+            bash /run-tests.sh /out 2>&1 | tee build/steamrt3/runtime.log
+      - name: Publish results
+        if: always()
+        env:
+          TEST_LABEL: ${{ matrix.label }}
+        run: |
+          echo "### $TEST_LABEL — SteamRT3 $STEAMRT_VERSION" >> "$GITHUB_STEP_SUMMARY"
+          if test -f build/steamrt3/result.md; then
+            cat build/steamrt3/result.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Validation did not complete; see build/runtime logs.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: steamrt3-${{ matrix.standard }}
+          path: build/steamrt3/
+          if-no-files-found: warn
