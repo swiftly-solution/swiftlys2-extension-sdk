@@ -8,6 +8,7 @@
 - [C++](#c-1)
   - [Xmake](#xmake-1)
   - [CMake](#cmake-1)
+- [API Documentation](API.md)
 
 # Requirements
 
