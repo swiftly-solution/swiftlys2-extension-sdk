@@ -1,5 +1,14 @@
 # API
 
+## Contents
+
+- [C](#c)
+- [C++](#c-1)
+  - [Core interfaces](#core-interfaces)
+  - [Error handling](#error-handling)
+  - [Lifecycle](#lifecycle)
+  - [Naming](#naming)
+
 ## C
 
 Include the C ABI header:
