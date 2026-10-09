@@ -1,6 +1,7 @@
 # Contents
 
 - [Requirements](#requirements)
+- [Loading extensions](#loading-extensions)
 - [C](#c)
   - [Xmake](#xmake)
   - [CMake](#cmake)
@@ -13,6 +14,29 @@
 - C11 for C extensions.
 - C++23 with `std::expected` for C++ extensions, such as GCC 13+ with its matching standard library.
 - Xmake 3.1+ or CMake 3.20+.
+
+# Loading extensions
+
+Place the built library under the
+SwiftlyS2 directory (default: `game/csgo/addons/swiftlys2`) as:
+
+```text
+extensions/
+└── my_extension/
+    └── my_extension.so    # Windows: my_extension.dll
+```
+
+The folder name is the extension ID and must match the library filename without
+its suffix (no `lib` prefix). SwiftlyS2 automatically scans these folders at
+startup; libraries placed directly in `extensions/` are ignored. If you use
+`-sw_path`, place `extensions/` under that custom SwiftlyS2 directory.
+
+From a managed plugin, use `Core.Extension.Load("my_extension")` or
+`Core.Extension.LoadFromPath(absolutePath)` to load at runtime. Path-based loading
+requires an absolute library path and uses its filename without the suffix as
+the ID. Loading an already loaded ID or library fails; call
+`Core.Extension.Unload("my_extension")` before
+loading it again.
 
 # C
 
