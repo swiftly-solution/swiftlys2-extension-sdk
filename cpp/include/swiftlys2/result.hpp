@@ -14,20 +14,42 @@
 namespace sw {
 
 /**
- * @brief SDK operation result with a detailed std::string error on failure.
+ * @brief An error status and an owned diagnostic message.
+ * @note Host errors preserve their original status, including unknown codes.
+ * Local argument validation uses SW_E_INVALID_ARG; other local failures use
+ * SW_E_FAILED. Status meanings depend on the operation.
+ */
+class Error {
+public:
+    /** @brief Construct an error with a nonzero status and a diagnostic. */
+    Error(sw_status code, std::string message)
+        : code_(code), message_(std::move(message)) {}
+
+    /** @brief Original host status or the status assigned by SDK validation. */
+    [[nodiscard]] sw_status code() const noexcept { return code_; }
+    /** @brief Detailed diagnostic, owned by this error. */
+    [[nodiscard]] const std::string& msg() const noexcept { return message_; }
+
+private:
+    sw_status code_;
+    std::string message_;
+};
+
+/**
+ * @brief SDK operation result with an Error on failure.
  * @tparam T Success value, or void for operations without a return value.
- * @note Errors describe the operation and its documented failure causes. The
- * underlying C API still returns sw_status. Formatting errors may allocate.
+ * @note Errors describe the operation and its documented failure causes.
+ * Formatting errors may allocate.
  */
 template<class T>
-using Result = std::expected<T, std::string>;
+using Result = std::expected<T, Error>;
 
 namespace detail {
 
-/** @brief Construct a failed result from an already formatted diagnostic. */
-inline std::unexpected<std::string> fail(std::string message)
+/** @brief Construct a failed result from a status and formatted diagnostic. */
+inline std::unexpected<Error> fail(sw_status code, std::string message)
 {
-    return std::unexpected(std::move(message));
+    return std::unexpected(Error(code, std::move(message)));
 }
 
 /**
@@ -35,7 +57,7 @@ inline std::unexpected<std::string> fail(std::string message)
  * @note Status meanings depend on the operation; callers supply the relevant
  * SW_E_INVALID_ARG and SW_E_FAILED causes from sw_extension.h.
  */
-inline std::unexpected<std::string> fail(
+inline std::unexpected<Error> fail(
     sw_status code, std::string_view operation, std::string_view invalid_arg,
     std::string_view failed = "operation failed")
 {
@@ -60,10 +82,10 @@ inline std::unexpected<std::string> fail(
         message += "host returned unexpected status " + std::to_string(code);
         break;
     }
-    return fail(std::move(message));
+    return fail(code, std::move(message));
 }
 
-/** @brief Convert a host status into success or an operation-specific string error. */
+/** @brief Convert a host status into success or an operation-specific error. */
 inline Result<void> check(
     sw_status code, std::string_view operation, std::string_view invalid_arg,
     std::string_view failed = "operation failed")
@@ -82,7 +104,7 @@ inline Result<void> check(
 inline Result<std::string> c_string(std::string_view value, std::string_view parameter)
 {
     if (value.find('\0') != std::string_view::npos)
-        return fail(std::string(parameter) + ": embedded NUL is not allowed");
+        return fail(SW_E_INVALID_ARG, std::string(parameter) + ": embedded NUL is not allowed");
     return std::string(value);
 }
 

@@ -30,7 +30,7 @@ public:
         std::string_view class_name, std::string_view field_name) const
     {
         if (!api_ || !api_->get_offset)
-            return detail::fail("schema.get_offset: schema interface or get_offset callback is unavailable");
+            return detail::fail(SW_E_FAILED, "schema.get_offset: schema interface or get_offset callback is unavailable");
         auto class_text = detail::c_string(class_name, "schema.get_offset: class_name");
         auto field_text = detail::c_string(field_name, "schema.get_offset: field_name");
         if (!class_text) return std::unexpected(class_text.error());
@@ -58,9 +58,9 @@ public:
         void* object, std::string_view class_name, std::string_view field_name) const
     {
         if (!api_ || !api_->set_state_changed)
-            return detail::fail("schema.set_state_changed: schema interface or set_state_changed callback is unavailable");
+            return detail::fail(SW_E_FAILED, "schema.set_state_changed: schema interface or set_state_changed callback is unavailable");
         if (!object)
-            return detail::fail("schema.set_state_changed: object is null; a live instance of the declaring class is required");
+            return detail::fail(SW_E_INVALID_ARG, "schema.set_state_changed: object is null; a live instance of the declaring class is required");
         auto class_text = detail::c_string(class_name, "schema.set_state_changed: class_name");
         auto field_text = detail::c_string(field_name, "schema.set_state_changed: field_name");
         if (!class_text) return std::unexpected(class_text.error());

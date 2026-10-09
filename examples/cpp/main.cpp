@@ -45,7 +45,8 @@ public:
     {
         auto released = core_->Memory().Free(buffer_);
         if (!released)
-            std::fprintf(stderr, "%s\n", released.error().c_str());
+            std::fprintf(stderr, "Error %d: %s\n",
+                static_cast<int>(released.error().code()), released.error().msg().c_str());
         else
             buffer_ = nullptr;
     }

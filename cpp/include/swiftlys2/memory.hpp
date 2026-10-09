@@ -86,9 +86,9 @@ public:
             original_ = nullptr;
             return {};
         } catch (const std::exception& exception) {
-            return fail(std::string(operation) + ": host callback threw: " + exception.what());
+            return fail(SW_E_FAILED, std::string(operation) + ": host callback threw: " + exception.what());
         } catch (...) {
-            return fail(std::string(operation) + ": host callback threw an unknown exception");
+            return fail(SW_E_FAILED, std::string(operation) + ": host callback threw an unknown exception");
         }
     }
 
@@ -140,7 +140,7 @@ public:
     [[nodiscard]] Result<void*> Alloc(std::size_t size) const
     {
         if (!api_ || !api_->alloc)
-            return detail::fail("memory.alloc: memory interface or alloc callback is unavailable");
+            return detail::fail(SW_E_FAILED, "memory.alloc: memory interface or alloc callback is unavailable");
         void* pointer = nullptr;
         const auto status = api_->alloc(api_, size, &pointer);
         if (status != SW_OK || !pointer)
@@ -159,7 +159,7 @@ public:
     [[nodiscard]] Result<void> Free(void* pointer) const
     {
         if (!api_ || !api_->free)
-            return detail::fail("memory.free: memory interface or free callback is unavailable");
+            return detail::fail(SW_E_FAILED, "memory.free: memory interface or free callback is unavailable");
         return detail::check(api_->free(api_, pointer), "memory.free", "memory interface is null");
     }
 
@@ -179,13 +179,13 @@ public:
     [[nodiscard]] Result<void*> Resize(void* pointer, std::size_t size) const
     {
         if (!api_ || !api_->resize)
-            return detail::fail("memory.resize: memory interface or resize callback is unavailable");
+            return detail::fail(SW_E_FAILED, "memory.resize: memory interface or resize callback is unavailable");
         void* resized = nullptr;
         const auto status = api_->resize(api_, pointer, size, &resized);
         if (status != SW_OK)
             return detail::fail(status, "memory.resize", "memory interface or output storage is null");
         if (size != 0 && !resized)
-            return detail::fail("memory.resize: game allocator returned null for " +
+            return detail::fail(SW_E_FAILED, "memory.resize: game allocator returned null for " +
                 std::to_string(size) + " bytes; the original allocation remains valid");
         return resized;
     }
@@ -204,11 +204,11 @@ public:
     [[nodiscard]] Result<AddressHook<Fn>> HookAddress(void* address, Fn replacement) const
     {
         if (!api_ || !api_->hook_address || !api_->unhook_address)
-            return detail::fail("memory.hook_address: memory interface, hook_address or unhook_address callback is unavailable");
+            return detail::fail(SW_E_FAILED, "memory.hook_address: memory interface, hook_address or unhook_address callback is unavailable");
         if (!address)
-            return detail::fail("memory.hook_address: function address is null");
+            return detail::fail(SW_E_INVALID_ARG, "memory.hook_address: function address is null");
         if (!replacement)
-            return detail::fail("memory.hook_address: replacement function is null");
+            return detail::fail(SW_E_INVALID_ARG, "memory.hook_address: replacement function is null");
         sw_hook_handle handle = nullptr;
         void* original = nullptr;
         const auto status = api_->hook_address(api_, address,
@@ -219,7 +219,7 @@ public:
         if (!handle || !original) {
             if (handle)
                 (void)api_->unhook_address(api_, handle);
-            return detail::fail("memory.hook_address: host returned success with a null hook handle or original trampoline");
+            return detail::fail(SW_E_FAILED, "memory.hook_address: host returned success with a null hook handle or original trampoline");
         }
         return AddressHook<Fn>(api_, handle, reinterpret_cast<Fn>(original));
     }
@@ -242,13 +242,13 @@ public:
         void* vtable, std::uint32_t index, Fn replacement) const
     {
         if (!api_ || !api_->hook_vtable || !api_->unhook_vtable)
-            return detail::fail("memory.hook_vtable: memory interface, hook_vtable or unhook_vtable callback is unavailable");
+            return detail::fail(SW_E_FAILED, "memory.hook_vtable: memory interface, hook_vtable or unhook_vtable callback is unavailable");
         if (!vtable)
-            return detail::fail("memory.hook_vtable: vtable address is null");
+            return detail::fail(SW_E_INVALID_ARG, "memory.hook_vtable: vtable address is null");
         if (!replacement)
-            return detail::fail("memory.hook_vtable: replacement function is null");
+            return detail::fail(SW_E_INVALID_ARG, "memory.hook_vtable: replacement function is null");
         if (index > static_cast<std::uint32_t>(INT_MAX))
-            return detail::fail("memory.hook_vtable: entry index " + std::to_string(index) + " exceeds INT_MAX");
+            return detail::fail(SW_E_INVALID_ARG, "memory.hook_vtable: entry index " + std::to_string(index) + " exceeds INT_MAX");
         sw_hook_handle handle = nullptr;
         void* original = nullptr;
         const auto status = api_->hook_vtable(api_, vtable, index,
@@ -259,7 +259,7 @@ public:
         if (!handle || !original) {
             if (handle)
                 (void)api_->unhook_vtable(api_, handle);
-            return detail::fail("memory.hook_vtable: host returned success with a null hook handle or original trampoline");
+            return detail::fail(SW_E_FAILED, "memory.hook_vtable: host returned success with a null hook handle or original trampoline");
         }
         return VTableHook<Fn>(api_, handle, reinterpret_cast<Fn>(original));
     }
@@ -275,7 +275,7 @@ public:
     [[nodiscard]] Result<void*> GameDataResolveSignature(std::string_view name) const
     {
         if (!api_ || !api_->gamedata_resolve_signature)
-            return detail::fail("memory.gamedata_resolve_signature: memory interface or gamedata_resolve_signature callback is unavailable");
+            return detail::fail(SW_E_FAILED, "memory.gamedata_resolve_signature: memory interface or gamedata_resolve_signature callback is unavailable");
         auto text = detail::c_string(name, "memory.gamedata_resolve_signature: name");
         if (!text)
             return std::unexpected(text.error());
@@ -298,7 +298,7 @@ public:
     [[nodiscard]] Result<std::uint32_t> GameDataGetOffset(std::string_view name) const
     {
         if (!api_ || !api_->gamedata_get_offset)
-            return detail::fail("memory.gamedata_get_offset: memory interface or gamedata_get_offset callback is unavailable");
+            return detail::fail(SW_E_FAILED, "memory.gamedata_get_offset: memory interface or gamedata_get_offset callback is unavailable");
         auto text = detail::c_string(name, "memory.gamedata_get_offset: name");
         if (!text)
             return std::unexpected(text.error());
@@ -323,7 +323,7 @@ public:
         std::string_view library, std::string_view pattern) const
     {
         if (!api_ || !api_->resolve_signature)
-            return detail::fail("memory.resolve_signature: memory interface or resolve_signature callback is unavailable");
+            return detail::fail(SW_E_FAILED, "memory.resolve_signature: memory interface or resolve_signature callback is unavailable");
         auto lib = detail::c_string(library, "memory.resolve_signature: library");
         auto signature = detail::c_string(pattern, "memory.resolve_signature: pattern");
         if (!lib) return std::unexpected(lib.error());
@@ -352,7 +352,7 @@ public:
         std::string_view library, std::string_view class_name) const
     {
         if (!api_ || !api_->find_vtable)
-            return detail::fail("memory.find_vtable: memory interface or find_vtable callback is unavailable");
+            return detail::fail(SW_E_FAILED, "memory.find_vtable: memory interface or find_vtable callback is unavailable");
         auto lib = detail::c_string(library, "memory.find_vtable: library");
         auto name = detail::c_string(class_name, "memory.find_vtable: class_name");
         if (!lib) return std::unexpected(lib.error());
@@ -378,7 +378,7 @@ public:
     [[nodiscard]] Result<void*> GetValveInterface(std::string_view version) const
     {
         if (!api_ || !api_->get_valve_interface)
-            return detail::fail("memory.get_valve_interface: memory interface or get_valve_interface callback is unavailable");
+            return detail::fail(SW_E_FAILED, "memory.get_valve_interface: memory interface or get_valve_interface callback is unavailable");
         auto name = detail::c_string(version, "memory.get_valve_interface: version");
         if (!name) return std::unexpected(name.error());
         void* pointer = nullptr;

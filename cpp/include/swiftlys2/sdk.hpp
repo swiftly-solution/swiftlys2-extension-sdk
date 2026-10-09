@@ -122,7 +122,7 @@ inline sw_status report_init_error(
         return status;
     }
     const auto error = fail(status, operation, invalid_arg, failed);
-    report_exception("initialization", error.error().c_str());
+    report_exception("initialization", error.error().msg().c_str());
     return status;
 }
 
@@ -218,7 +218,7 @@ sw_status RunExtension(const sw_init_context* ctx) noexcept
         auto description = detail::c_string(registered->instance->Description(), "extension.description");
         for (const auto* metadata : {&name, &version, &author, &description}) {
             if (!*metadata) {
-                detail::report_exception("initialization", metadata->error().c_str());
+                detail::report_exception("initialization", metadata->error().msg().c_str());
                 return SW_E_INVALID_ARG;
             }
         }
@@ -235,7 +235,7 @@ sw_status RunExtension(const sw_init_context* ctx) noexcept
             sw::Memory(raw->memory), sw::Schema(raw->schema),
             sw::Shared(raw->shared), sw::Misc(hot_reloaded != 0)});
         if (!loaded) {
-            detail::report_exception("on_load", loaded.error().c_str());
+            detail::report_exception("on_load", loaded.error().msg().c_str());
             return SW_E_FAILED;
         }
         return SW_OK;

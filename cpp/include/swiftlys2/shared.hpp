@@ -29,7 +29,7 @@ public:
     [[nodiscard]] Result<void*> GetSharedPointer(std::string_view key) const
     {
         if (!api_ || !api_->get_shared_pointer)
-            return detail::fail("shared.get_shared_pointer: shared interface or get_shared_pointer callback is unavailable");
+            return detail::fail(SW_E_FAILED, "shared.get_shared_pointer: shared interface or get_shared_pointer callback is unavailable");
         auto text = detail::c_string(key, "shared.get_shared_pointer: key");
         if (!text) return std::unexpected(text.error());
         void* pointer = nullptr;
@@ -52,7 +52,7 @@ public:
     [[nodiscard]] Result<void> SetSharedPointer(std::string_view key, void* pointer) const
     {
         if (!api_ || !api_->set_shared_pointer)
-            return detail::fail("shared.set_shared_pointer: shared interface or set_shared_pointer callback is unavailable");
+            return detail::fail(SW_E_FAILED, "shared.set_shared_pointer: shared interface or set_shared_pointer callback is unavailable");
         auto text = detail::c_string(key, "shared.set_shared_pointer: key");
         if (!text) return std::unexpected(text.error());
         const auto status = api_->set_shared_pointer(api_, text->c_str(), pointer);
@@ -72,7 +72,7 @@ public:
     [[nodiscard]] Result<bool> HasSharedPointer(std::string_view key) const
     {
         if (!api_ || !api_->has_shared_pointer)
-            return detail::fail("shared.has_shared_pointer: shared interface or has_shared_pointer callback is unavailable");
+            return detail::fail(SW_E_FAILED, "shared.has_shared_pointer: shared interface or has_shared_pointer callback is unavailable");
         auto text = detail::c_string(key, "shared.has_shared_pointer: key");
         if (!text) return std::unexpected(text.error());
         std::int32_t found = 0;
@@ -93,7 +93,7 @@ public:
     [[nodiscard]] Result<void> RemoveSharedPointer(std::string_view key) const
     {
         if (!api_ || !api_->remove_shared_pointer)
-            return detail::fail("shared.remove_shared_pointer: shared interface or remove_shared_pointer callback is unavailable");
+            return detail::fail(SW_E_FAILED, "shared.remove_shared_pointer: shared interface or remove_shared_pointer callback is unavailable");
         auto text = detail::c_string(key, "shared.remove_shared_pointer: key");
         if (!text) return std::unexpected(text.error());
         const auto status = api_->remove_shared_pointer(api_, text->c_str());

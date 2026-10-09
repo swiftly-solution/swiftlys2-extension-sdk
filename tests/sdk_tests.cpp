@@ -376,7 +376,7 @@ public:
         auto hook = core.Memory().HookAddress(reinterpret_cast<void*>(&original), &replacement);
         CHECK(hook);
         hook_ = std::move(*hook);
-        if (mode == behavior::error) return std::unexpected(std::string("expected detailed load error"));
+        if (mode == behavior::error) return std::unexpected(sw::Error(SW_E_FAILED, "expected detailed load error"));
         if (mode == behavior::load_exception) throw std::runtime_error("expected load exception");
         return {};
     }
@@ -421,11 +421,13 @@ public:
     }
 };
 
-void check_error(const auto& result, std::initializer_list<std::string_view> fragments)
+void check_error(const auto& result, sw_status code,
+                 std::initializer_list<std::string_view> fragments)
 {
     CHECK(!result);
+    CHECK(result.error().code() == code);
     for (const auto fragment : fragments)
-        CHECK(result.error().find(fragment) != std::string::npos);
+        CHECK(result.error().msg().find(fragment) != std::string::npos);
 }
 
 void resource_contracts()
@@ -440,7 +442,7 @@ void resource_contracts()
         auto* previous = pointer;
         host.fail_resize = true;
         auto failed = memory.Resize(pointer, 128);
-        check_error(failed, {"memory.resize", "null", "128", "original allocation remains valid"});
+        check_error(failed, SW_E_FAILED, {"memory.resize", "null", "128", "original allocation remains valid"});
         CHECK(pointer == previous && host.allocations.at(pointer) == 16);
         CHECK(static_cast<unsigned char*>(pointer)[0] == 42);
         host.fail_resize = false;
@@ -539,6 +541,18 @@ void lookup_contracts()
     CHECK(!sw::Shared(nullptr).GetSharedPointer("key"));
 }
 
+void result_contracts()
+{
+    std::string message = "custom extension failure";
+    sw::Result<int> result = std::unexpected(sw::Error(-123, message));
+    message.clear();
+    check_error(result, -123, {"custom extension failure"});
+    sw::Result<void> propagated = std::unexpected(result.error());
+    check_error(propagated, -123, {"custom extension failure"});
+    const sw::Error& error = propagated.error();
+    CHECK(error.msg() == "custom extension failure");
+}
+
 void error_contracts()
 {
     host host;
@@ -546,64 +560,61 @@ void error_contracts()
     sw::Schema schema(&host.schema);
     sw::Shared shared(&host.shared);
     host.fail_alloc = true;
-    check_error(memory.Alloc(1024), {"memory.alloc", "allocator returned null", "1024"});
+    check_error(memory.Alloc(1024), SW_E_FAILED, {"memory.alloc", "allocator returned null", "1024"});
     host.fail_alloc = false;
     host.broken_alloc = true;
-    check_error(memory.Alloc(32), {"memory.alloc", "null", "32"});
+    check_error(memory.Alloc(32), SW_E_FAILED, {"memory.alloc", "null", "32"});
     host.broken_alloc = false;
 
     // Raw allocation needs only the allocator callback; cleanup is explicit.
     const auto saved_free = std::exchange(host.memory.free, nullptr);
     auto allocated = memory.Alloc(1);
     CHECK(allocated && *allocated);
-    check_error(memory.Free(*allocated), {"memory.free", "free callback is unavailable"});
+    check_error(memory.Free(*allocated), SW_E_FAILED, {"memory.free", "free callback is unavailable"});
     host.memory.free = saved_free;
     CHECK(memory.Free(*allocated));
 
-    check_error(memory.GameDataResolveSignature("absent"), {"gamedata_resolve_signature", "absent", "name does not exist"});
-    check_error(memory.GameDataResolveSignature("null"), {"gamedata_resolve_signature", "null", "stored signature address is null"});
-    check_error(memory.GameDataResolveSignature("broken"), {"gamedata_resolve_signature", "broken", "null"});
-    check_error(memory.GameDataGetOffset("absent"), {"gamedata_get_offset", "absent", "offset name does not exist"});
-    check_error(memory.ResolveSignature("missing", "pattern"), {"resolve_signature", "missing", "pattern", "scan failed"});
-    check_error(memory.FindVTable("server", "MissingClass"), {"find_vtable", "MissingClass", "lookup failed"});
-    check_error(memory.GetValveInterface("Missing001"), {"get_valve_interface", "Missing001", "lookup failed"});
-    check_error(schema.GetOffset("MissingClass", "field"), {"schema.get_offset", "MissingClass", "field", "class or field does not exist"});
-    check_error(schema.SetStateChanged(&host.object, "CBaseEntity", "missing"),
-        {"set_state_changed", "CBaseEntity", "missing", "class or field does not exist"});
-    check_error(schema.SetStateChanged(nullptr, "CBaseEntity", "m_iHealth"), {"set_state_changed", "object is null"});
-    check_error(shared.GetSharedPointer("absent"), {"shared.get_shared_pointer", "absent", "key does not exist"});
-    check_error(shared.RemoveSharedPointer("absent"), {"shared.remove_shared_pointer", "absent", "key does not exist"});
+    check_error(memory.GameDataResolveSignature("absent"), SW_E_INVALID_ARG, {"gamedata_resolve_signature", "absent", "name does not exist"});
+    check_error(memory.GameDataResolveSignature("null"), SW_E_FAILED, {"gamedata_resolve_signature", "null", "stored signature address is null"});
+    check_error(memory.GameDataResolveSignature("broken"), SW_E_FAILED, {"gamedata_resolve_signature", "broken", "null"});
+    check_error(memory.GameDataGetOffset("absent"), SW_E_INVALID_ARG, {"gamedata_get_offset", "absent", "offset name does not exist"});
+    check_error(memory.ResolveSignature("missing", "pattern"), SW_E_FAILED, {"resolve_signature", "missing", "pattern", "scan failed"});
+    check_error(memory.FindVTable("server", "MissingClass"), SW_E_FAILED, {"find_vtable", "MissingClass", "lookup failed"});
+    check_error(memory.GetValveInterface("Missing001"), SW_E_FAILED, {"get_valve_interface", "Missing001", "lookup failed"});
+    check_error(schema.GetOffset("MissingClass", "field"), SW_E_INVALID_ARG, {"schema.get_offset", "MissingClass", "field", "class or field does not exist"});
+    check_error(schema.SetStateChanged(&host.object, "CBaseEntity", "missing"), SW_E_INVALID_ARG, {"set_state_changed", "CBaseEntity", "missing", "class or field does not exist"});
+    check_error(schema.SetStateChanged(nullptr, "CBaseEntity", "m_iHealth"), SW_E_INVALID_ARG, {"set_state_changed", "object is null"});
+    check_error(shared.GetSharedPointer("absent"), SW_E_INVALID_ARG, {"shared.get_shared_pointer", "absent", "key does not exist"});
+    check_error(shared.RemoveSharedPointer("absent"), SW_E_INVALID_ARG, {"shared.remove_shared_pointer", "absent", "key does not exist"});
 
     const std::string_view invalid("bad\0text", 8);
-    check_error(memory.GameDataResolveSignature(invalid), {"gamedata_resolve_signature", "name", "embedded NUL"});
-    check_error(memory.GameDataGetOffset(invalid), {"gamedata_get_offset", "name", "embedded NUL"});
-    check_error(memory.ResolveSignature(invalid, "sig"), {"resolve_signature", "library", "embedded NUL"});
-    check_error(memory.ResolveSignature("server", invalid), {"resolve_signature", "pattern", "embedded NUL"});
-    check_error(memory.FindVTable(invalid, "Entity"), {"find_vtable", "library", "embedded NUL"});
-    check_error(memory.FindVTable("server", invalid), {"find_vtable", "class_name", "embedded NUL"});
-    check_error(memory.GetValveInterface(invalid), {"get_valve_interface", "version", "embedded NUL"});
-    check_error(schema.GetOffset(invalid, "field"), {"schema.get_offset", "class_name", "embedded NUL"});
-    check_error(schema.GetOffset("Entity", invalid), {"schema.get_offset", "field_name", "embedded NUL"});
-    check_error(schema.SetStateChanged(&host.object, invalid, "field"), {"set_state_changed", "class_name", "embedded NUL"});
-    check_error(schema.SetStateChanged(&host.object, "Entity", invalid), {"set_state_changed", "field_name", "embedded NUL"});
-    check_error(shared.GetSharedPointer(invalid), {"shared.get_shared_pointer", "key", "embedded NUL"});
-    check_error(shared.SetSharedPointer(invalid, nullptr), {"shared.set_shared_pointer", "key", "embedded NUL"});
-    check_error(shared.HasSharedPointer(invalid), {"shared.has_shared_pointer", "key", "embedded NUL"});
-    check_error(shared.RemoveSharedPointer(invalid), {"shared.remove_shared_pointer", "key", "embedded NUL"});
+    check_error(memory.GameDataResolveSignature(invalid), SW_E_INVALID_ARG, {"gamedata_resolve_signature", "name", "embedded NUL"});
+    check_error(memory.GameDataGetOffset(invalid), SW_E_INVALID_ARG, {"gamedata_get_offset", "name", "embedded NUL"});
+    check_error(memory.ResolveSignature(invalid, "sig"), SW_E_INVALID_ARG, {"resolve_signature", "library", "embedded NUL"});
+    check_error(memory.ResolveSignature("server", invalid), SW_E_INVALID_ARG, {"resolve_signature", "pattern", "embedded NUL"});
+    check_error(memory.FindVTable(invalid, "Entity"), SW_E_INVALID_ARG, {"find_vtable", "library", "embedded NUL"});
+    check_error(memory.FindVTable("server", invalid), SW_E_INVALID_ARG, {"find_vtable", "class_name", "embedded NUL"});
+    check_error(memory.GetValveInterface(invalid), SW_E_INVALID_ARG, {"get_valve_interface", "version", "embedded NUL"});
+    check_error(schema.GetOffset(invalid, "field"), SW_E_INVALID_ARG, {"schema.get_offset", "class_name", "embedded NUL"});
+    check_error(schema.GetOffset("Entity", invalid), SW_E_INVALID_ARG, {"schema.get_offset", "field_name", "embedded NUL"});
+    check_error(schema.SetStateChanged(&host.object, invalid, "field"), SW_E_INVALID_ARG, {"set_state_changed", "class_name", "embedded NUL"});
+    check_error(schema.SetStateChanged(&host.object, "Entity", invalid), SW_E_INVALID_ARG, {"set_state_changed", "field_name", "embedded NUL"});
+    check_error(shared.GetSharedPointer(invalid), SW_E_INVALID_ARG, {"shared.get_shared_pointer", "key", "embedded NUL"});
+    check_error(shared.SetSharedPointer(invalid, nullptr), SW_E_INVALID_ARG, {"shared.set_shared_pointer", "key", "embedded NUL"});
+    check_error(shared.HasSharedPointer(invalid), SW_E_INVALID_ARG, {"shared.has_shared_pointer", "key", "embedded NUL"});
+    check_error(shared.RemoveSharedPointer(invalid), SW_E_INVALID_ARG, {"shared.remove_shared_pointer", "key", "embedded NUL"});
 
-    check_error(memory.HookAddress(nullptr, &replacement), {"hook_address", "address is null"});
-    check_error(memory.HookAddress(reinterpret_cast<void*>(&original), static_cast<function>(nullptr)),
-        {"hook_address", "replacement function is null"});
-    check_error(memory.HookVTable(nullptr, 2, &replacement), {"hook_vtable", "vtable address is null"});
-    check_error(memory.HookVTable(&host.object, 2, static_cast<function>(nullptr)),
-        {"hook_vtable", "replacement function is null"});
-    check_error(memory.HookVTable(&host.object, UINT32_MAX, &replacement), {"hook_vtable", "index", "exceeds INT_MAX"});
+    check_error(memory.HookAddress(nullptr, &replacement), SW_E_INVALID_ARG, {"hook_address", "address is null"});
+    check_error(memory.HookAddress(reinterpret_cast<void*>(&original), static_cast<function>(nullptr)), SW_E_INVALID_ARG, {"hook_address", "replacement function is null"});
+    check_error(memory.HookVTable(nullptr, 2, &replacement), SW_E_INVALID_ARG, {"hook_vtable", "vtable address is null"});
+    check_error(memory.HookVTable(&host.object, 2, static_cast<function>(nullptr)), SW_E_INVALID_ARG, {"hook_vtable", "replacement function is null"});
+    check_error(memory.HookVTable(&host.object, UINT32_MAX, &replacement), SW_E_INVALID_ARG, {"hook_vtable", "index", "exceeds INT_MAX"});
     host.fail_hook = true;
-    check_error(memory.HookAddress(reinterpret_cast<void*>(&original), &replacement), {"hook_address", "trampoline is null", "not enabled"});
-    check_error(memory.HookVTable(&host.object, 2, &replacement), {"hook_vtable", "trampoline is null", "not enabled"});
+    check_error(memory.HookAddress(reinterpret_cast<void*>(&original), &replacement), SW_E_FAILED, {"hook_address", "trampoline is null", "not enabled"});
+    check_error(memory.HookVTable(&host.object, 2, &replacement), SW_E_FAILED, {"hook_vtable", "trampoline is null", "not enabled"});
     host.fail_hook = false;
     host.broken_hook = true;
-    check_error(memory.HookVTable(&host.object, 2, &replacement), {"hook_vtable", "success", "null"});
+    check_error(memory.HookVTable(&host.object, 2, &replacement), SW_E_FAILED, {"hook_vtable", "success", "null"});
     CHECK(host.vtable_hooks.empty() && host.vtable_unhooks == 1);
     host.broken_hook = false;
 
@@ -611,12 +622,12 @@ void error_contracts()
     CHECK(hook);
     const auto saved_unhook = std::exchange(host.memory.unhook_address,
         +[](const sw_memory*, sw_hook_handle) -> sw_status { return SW_E_INVALID_ARG; });
-    check_error(hook->Reset(), {"unhook_address", "interface or hook handle is null"});
+    check_error(hook->Reset(), SW_E_INVALID_ARG, {"unhook_address", "interface or hook handle is null"});
     CHECK(*hook && hook->Original());
     host.memory.unhook_address = +[](const sw_memory*, sw_hook_handle) -> sw_status {
         throw std::runtime_error("unhook exception details");
     };
-    check_error(hook->Reset(), {"unhook_address", "unhook exception details"});
+    check_error(hook->Reset(), SW_E_FAILED, {"unhook_address", "unhook exception details"});
     host.memory.unhook_address = saved_unhook;
     CHECK(hook->Reset());
 
@@ -625,35 +636,35 @@ void error_contracts()
     sw_shared absent_shared{};
     for (const auto* api : {static_cast<const sw_memory*>(nullptr), static_cast<const sw_memory*>(&absent_memory)}) {
         const sw::Memory absent(api);
-        check_error(absent.Alloc(1), {"memory.alloc", "unavailable"});
-        check_error(absent.Free(nullptr), {"memory.free", "unavailable"});
-        check_error(absent.Resize(nullptr, 1), {"memory.resize", "unavailable"});
-        check_error(absent.GameDataResolveSignature("sig"), {"gamedata_resolve_signature", "unavailable"});
-        check_error(absent.GameDataGetOffset("offset"), {"gamedata_get_offset", "unavailable"});
-        check_error(absent.ResolveSignature("server", "sig"), {"resolve_signature", "unavailable"});
-        check_error(absent.FindVTable("server", "Entity"), {"find_vtable", "unavailable"});
-        check_error(absent.GetValveInterface("Example001"), {"get_valve_interface", "unavailable"});
-        check_error(absent.HookAddress(reinterpret_cast<void*>(&original), &replacement), {"hook_address", "unavailable"});
-        check_error(absent.HookVTable(&host.object, 2, &replacement), {"hook_vtable", "unavailable"});
+        check_error(absent.Alloc(1), SW_E_FAILED, {"memory.alloc", "unavailable"});
+        check_error(absent.Free(nullptr), SW_E_FAILED, {"memory.free", "unavailable"});
+        check_error(absent.Resize(nullptr, 1), SW_E_FAILED, {"memory.resize", "unavailable"});
+        check_error(absent.GameDataResolveSignature("sig"), SW_E_FAILED, {"gamedata_resolve_signature", "unavailable"});
+        check_error(absent.GameDataGetOffset("offset"), SW_E_FAILED, {"gamedata_get_offset", "unavailable"});
+        check_error(absent.ResolveSignature("server", "sig"), SW_E_FAILED, {"resolve_signature", "unavailable"});
+        check_error(absent.FindVTable("server", "Entity"), SW_E_FAILED, {"find_vtable", "unavailable"});
+        check_error(absent.GetValveInterface("Example001"), SW_E_FAILED, {"get_valve_interface", "unavailable"});
+        check_error(absent.HookAddress(reinterpret_cast<void*>(&original), &replacement), SW_E_FAILED, {"hook_address", "unavailable"});
+        check_error(absent.HookVTable(&host.object, 2, &replacement), SW_E_FAILED, {"hook_vtable", "unavailable"});
     }
     for (const auto* api : {static_cast<const sw_schema*>(nullptr), static_cast<const sw_schema*>(&absent_schema)}) {
-        check_error(sw::Schema(api).GetOffset("Entity", "field"), {"schema.get_offset", "unavailable"});
-        check_error(sw::Schema(api).SetStateChanged(&host.object, "Entity", "field"), {"set_state_changed", "unavailable"});
+        check_error(sw::Schema(api).GetOffset("Entity", "field"), SW_E_FAILED, {"schema.get_offset", "unavailable"});
+        check_error(sw::Schema(api).SetStateChanged(&host.object, "Entity", "field"), SW_E_FAILED, {"set_state_changed", "unavailable"});
     }
     for (const auto* api : {static_cast<const sw_shared*>(nullptr), static_cast<const sw_shared*>(&absent_shared)}) {
         const sw::Shared absent(api);
-        check_error(absent.GetSharedPointer("key"), {"shared.get_shared_pointer", "unavailable"});
-        check_error(absent.SetSharedPointer("key", nullptr), {"shared.set_shared_pointer", "unavailable"});
-        check_error(absent.HasSharedPointer("key"), {"shared.has_shared_pointer", "unavailable"});
-        check_error(absent.RemoveSharedPointer("key"), {"shared.remove_shared_pointer", "unavailable"});
+        check_error(absent.GetSharedPointer("key"), SW_E_FAILED, {"shared.get_shared_pointer", "unavailable"});
+        check_error(absent.SetSharedPointer("key", nullptr), SW_E_FAILED, {"shared.set_shared_pointer", "unavailable"});
+        check_error(absent.HasSharedPointer("key"), SW_E_FAILED, {"shared.has_shared_pointer", "unavailable"});
+        check_error(absent.RemoveSharedPointer("key"), SW_E_FAILED, {"shared.remove_shared_pointer", "unavailable"});
     }
 
     host.offset_status = SW_E_BUFFER_TOO_SMALL;
-    check_error(memory.GameDataGetOffset("offset"), {"gamedata_get_offset", "buffer is too small"});
+    check_error(memory.GameDataGetOffset("offset"), SW_E_BUFFER_TOO_SMALL, {"gamedata_get_offset", "buffer is too small"});
     host.offset_status = SW_E_INVALID_OPERATION;
-    check_error(memory.GameDataGetOffset("offset"), {"gamedata_get_offset", "not allowed in the current state"});
+    check_error(memory.GameDataGetOffset("offset"), SW_E_INVALID_OPERATION, {"gamedata_get_offset", "not allowed in the current state"});
     host.offset_status = -91;
-    check_error(memory.GameDataGetOffset("offset"), {"gamedata_get_offset", "unexpected status -91"});
+    check_error(memory.GameDataGetOffset("offset"), -91, {"gamedata_get_offset", "unexpected status -91"});
 }
 
 void lifecycle_contracts()
@@ -736,7 +747,11 @@ void lifecycle_contracts()
 
 } // namespace
 
-static_assert(std::is_same_v<sw::Result<void>::error_type, std::string>);
+static_assert(std::is_same_v<sw::Result<void>::error_type, sw::Error>);
+static_assert(std::is_same_v<decltype(std::declval<const sw::Error&>().code()), sw_status>);
+static_assert(std::is_same_v<decltype(std::declval<const sw::Error&>().msg()), const std::string&>);
+static_assert(noexcept(std::declval<const sw::Error&>().code()));
+static_assert(noexcept(std::declval<const sw::Error&>().msg()));
 static_assert(std::is_same_v<decltype(std::declval<sw::Memory>().Alloc(1)), sw::Result<void*>>);
 static_assert(std::is_same_v<decltype(std::declval<const sw::Core&>().Memory()), const sw::Memory&>);
 static_assert(std::is_same_v<decltype(std::declval<const sw::Core&>().Schema()), const sw::Schema&>);
@@ -756,6 +771,7 @@ int main()
 {
     resource_contracts();
     lookup_contracts();
+    result_contracts();
     error_contracts();
     lifecycle_contracts();
     std::puts("SDK ownership, lookup and lifecycle contracts passed.");
